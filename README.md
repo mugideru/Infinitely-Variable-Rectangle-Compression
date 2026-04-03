@@ -4,6 +4,11 @@
 
 IVR is a **lossless image compression format that represents an image as a sequence of same-color rectangles**.
 
+IVR stands for
+Infinitely Variable Rectangle,
+and it is also
+Imitate Vector Rendering.
+
 It works especially well for:
 
 - low-color images
@@ -219,6 +224,11 @@ MIT License
 IVR は、**画像を「同色の長方形」の列として表現する可逆画像圧縮フォーマット**です。  
 特に、**少色画像・モザイク画像・ドット絵・UI風画像・フラットなイラスト**に対して非常に高い圧縮率を発揮します。
 
+IVRとは
+Infinitely Variable Rectangle  
+の略であり
+Imitate Vector Rendering
+でもあります
 このリポジトリには、以下が含まれます：
 
 - **Python 実装**
