@@ -31,7 +31,10 @@ typedef struct {
 } Color;
 
 typedef struct {
-    uint32_t w, h, c_idx;
+    uint32_t w, h;
+    uint32_t color;      // 0xRRGGBB
+    uint16_t pal_idx;    // 0..511
+    uint8_t is_palette;  // 1=palette, 0=raw RGB
 } Rect;
 
 typedef struct {
@@ -45,6 +48,24 @@ typedef struct {
     uint32_t index;
     bool occupied;
 } HashEntry;
+
+typedef struct {
+    uint32_t color;
+    uint32_t count;
+} ColorCount;
+
+int find_palette_index(Color *palette, uint32_t pal_size, uint32_t color) {
+    uint8_t r = (color >> 16) & 0xFF;
+    uint8_t g = (color >> 8) & 0xFF;
+    uint8_t b = color & 0xFF;
+
+    for (uint32_t i = 0; i < pal_size; i++) {
+        if (palette[i].r == r && palette[i].g == g && palette[i].b == b) {
+            return (int)i;
+        }
+    }
+    return -1;
+}
 
 // BitWriter / BitReader
 void bw_init(BitWriter *bw) {
@@ -320,22 +341,26 @@ void resize_hash_table(HashEntry **table, uint32_t *current_size, uint32_t pal_c
     *current_size = new_size;
 }
 
-// パレット化・矩形エンコード・デコード
-void make_palette(Image img, Color **out_palette, uint32_t *out_pal_size, uint32_t **out_indexed) {
+int cmp_color_count_desc(const void *a, const void *b) {
+    const ColorCount *x = (const ColorCount*)a;
+    const ColorCount *y = (const ColorCount*)b;
+    if (x->count < y->count) return 1;
+    if (x->count > y->count) return -1;
+    return 0;
+}
+
+void make_top_palette(Image img, Color **out_palette, uint32_t *out_pal_size) {
     int total_pixels = img.width * img.height;
-    
-    uint32_t current_hash_size = 65536; // 最初は小さく始めてもOK
-    HashEntry *table = (HashEntry *)calloc(current_hash_size, sizeof(HashEntry));
-    
-    // パレット配列は最大色数（1677万）を想定して大きめに確保するか、
-    // 同様に realloc で拡張する必要があります。
-    Color *palette = (Color *)malloc(65536 * sizeof(Color)); 
-    uint32_t *indexed = (uint32_t *)malloc(total_pixels * sizeof(uint32_t));
-    uint32_t pal_cnt = 0;
+
+    uint32_t hash_size = 65536;
+    HashEntry *table = (HashEntry *)calloc(hash_size, sizeof(HashEntry));
+    ColorCount *counts = (ColorCount *)malloc(65536 * sizeof(ColorCount));
+    uint32_t count_cap = 65536;
+    uint32_t unique_cnt = 0;
 
     for (int i = 0; i < total_pixels; i++) {
         uint32_t c = (img.pixels[i].r << 16) | (img.pixels[i].g << 8) | img.pixels[i].b;
-        uint32_t mask = current_hash_size - 1;
+        uint32_t mask = hash_size - 1;
         uint32_t h = hash_func(c) & mask;
 
         while (table[h].occupied) {
@@ -343,47 +368,66 @@ void make_palette(Image img, Color **out_palette, uint32_t *out_pal_size, uint32
             h = (h + 1) & mask;
         }
 
-        // --- 修正版：make_palette 内のループ部分 ---
-
-if (!table[h].occupied) {
-    // 1. ハッシュテーブルのリサイズ
-    if (pal_cnt > current_hash_size * 0.7) {
-                resize_hash_table(&table, &current_hash_size, pal_cnt);
-                mask = current_hash_size - 1;
+        if (!table[h].occupied) {
+            if (unique_cnt > hash_size * 0.7) {
+                resize_hash_table(&table, &hash_size, unique_cnt);
+                mask = hash_size - 1;
                 h = hash_func(c) & mask;
                 while (table[h].occupied) {
                     h = (h + 1) & mask;
                 }
             }
 
-            // 2. パレット配列自体の拡張 (忘れていた部分)
-            // 例えば 65536刻みで増やす、あるいは倍々に増やす
-            static uint32_t palette_capacity = 65536; 
-            if (pal_cnt >= palette_capacity) {
-                palette_capacity *= 2; // 容量を倍にする
-                Color *temp = (Color *)realloc(palette, palette_capacity * sizeof(Color));
-                if (!temp) { /* エラー処理 */ exit(1); }
-                palette = temp;
+            if (unique_cnt >= count_cap) {
+                count_cap *= 2;
+                counts = (ColorCount *)realloc(counts, count_cap * sizeof(ColorCount));
             }
 
             table[h].occupied = true;
             table[h].color = c;
-            table[h].index = pal_cnt;
+            table[h].index = unique_cnt;
 
-            palette[pal_cnt].r = (c >> 16) & 0xFF;
-            palette[pal_cnt].g = (c >> 8) & 0xFF;
-            palette[pal_cnt].b = c & 0xFF;
-
-            indexed[i] = pal_cnt;
-            pal_cnt++;
+            counts[unique_cnt].color = c;
+            counts[unique_cnt].count = 1;
+            unique_cnt++;
         } else {
-            indexed[i] = table[h].index;
+            counts[table[h].index].count++;
         }
     }
 
+    qsort(counts, unique_cnt, sizeof(ColorCount), cmp_color_count_desc);
+
+    uint32_t pal_size = unique_cnt < 512 ? unique_cnt : 512;
+    Color *palette = (Color *)malloc(pal_size * sizeof(Color));
+
+    for (uint32_t i = 0; i < pal_size; i++) {
+        uint32_t c = counts[i].color;
+        palette[i].r = (c >> 16) & 0xFF;
+        palette[i].g = (c >> 8) & 0xFF;
+        palette[i].b = c & 0xFF;
+    }
+
     free(table);
-    *out_palette = (Color *)realloc(palette, pal_cnt * sizeof(Color));
-    *out_pal_size = pal_cnt;
+    free(counts);
+
+    *out_palette = palette;
+    *out_pal_size = pal_size;
+}
+
+// パレット化・矩形エンコード・デコード
+void make_palette(Image img, Color **out_palette, uint32_t *out_pal_size, uint32_t **out_indexed) {
+    int total_pixels = img.width * img.height;
+
+    // 上位512色だけパレット化
+    make_top_palette(img, out_palette, out_pal_size);
+
+    // indexed には「パレット index」ではなく「生のRGB値」を入れる
+    uint32_t *indexed = (uint32_t *)malloc(total_pixels * sizeof(uint32_t));
+
+    for (int i = 0; i < total_pixels; i++) {
+        indexed[i] = (img.pixels[i].r << 16) | (img.pixels[i].g << 8) | img.pixels[i].b;
+    }
+
     *out_indexed = indexed;
 }
 Rect* encode_image(uint32_t *indexed, int w, int h, uint32_t *out_rect_count) {
@@ -452,9 +496,12 @@ Rect* encode_image(uint32_t *indexed, int w, int h, uint32_t *out_rect_count) {
             rect_cap *= 2;
             rects = (Rect *)realloc(rects, rect_cap * sizeof(Rect));
         }
+
         rects[rect_count].w = final_w;
         rects[rect_count].h = final_h;
-        rects[rect_count].c_idx = c;
+        rects[rect_count].color = c;
+        rects[rect_count].is_palette = 0;
+        rects[rect_count].pal_idx = 0;
         rect_count++;
 
         for (int j = curr_y; j < curr_y + final_h; j++) {
@@ -470,7 +517,7 @@ Rect* encode_image(uint32_t *indexed, int w, int h, uint32_t *out_rect_count) {
 }
 
 Image decode_image(Rect *rects, uint32_t rect_count, Color *palette,
-                          int w, int h, int scale_x, int scale_y) {
+                   int w, int h, int scale_x, int scale_y) {
     Image img;
     img.width = w * scale_x;
     img.height = h * scale_y;
@@ -483,9 +530,7 @@ Image decode_image(Rect *rects, uint32_t rect_count, Color *palette,
     for (uint32_t k = 0; k < rect_count; k++) {
         uint32_t rw = rects[k].w;
         uint32_t rh = rects[k].h;
-        uint32_t ci = rects[k].c_idx;
 
-        // 元画像上の「次の未使用位置」を探す
         while (curr_y < h) {
             if (used[curr_y * w + curr_x] == 0) break;
             curr_x++;
@@ -496,16 +541,18 @@ Image decode_image(Rect *rects, uint32_t rect_count, Color *palette,
         }
         if (curr_y >= h) break;
 
-        Color color = palette[ci];
+        uint32_t c = rects[k].color;
+        Color color;
+        color.r = (c >> 16) & 0xFF;
+        color.g = (c >> 8) & 0xFF;
+        color.b = c & 0xFF;
 
-        // まず元画像上で使用済みにする
         for (int j = curr_y; j < curr_y + (int)rh; j++) {
             for (int i = curr_x; i < curr_x + (int)rw; i++) {
                 used[j * w + i] = 1;
             }
         }
 
-        // 拡大後画像へ直接描画
         int dx0 = curr_x * scale_x;
         int dy0 = curr_y * scale_y;
         int dx1 = (curr_x + (int)rw) * scale_x;
@@ -561,10 +608,20 @@ void bmp_to_ivr(const char *bmp_filename, const char *ivr_filename) {
     }
 
     int color_bits = bits_needed(pal_size);
+
     for (uint32_t i = 0; i < rect_count; i++) {
+        int pidx = find_palette_index(palette, pal_size, rects[i].color);
+
         bw_write_exp_golomb(&bw, rects[i].w);
         bw_write_exp_golomb(&bw, rects[i].h);
-        bw_write_bits(&bw, rects[i].c_idx, color_bits);
+
+        if (pidx >= 0) {
+            bw_write_bit(&bw, 1);                  // palette color
+            bw_write_bits(&bw, (uint32_t)pidx, color_bits);
+        } else {
+            bw_write_bit(&bw, 0);                  // raw RGB
+            bw_write_bits(&bw, rects[i].color, 24);
+        }
     }
     bw_finish(&bw);
 
@@ -584,8 +641,8 @@ void bmp_to_ivr(const char *bmp_filename, const char *ivr_filename) {
     printf("エンコード時間:   %.4f 秒\n", (double)(t2 - t1) / CLOCKS_PER_SEC);
     printf("保存時間:         %.4f 秒\n", (double)(t3 - t2) / CLOCKS_PER_SEC);
     printf("----------------------------------------\n");
-    printf("palette size: %u\n", pal_size);
-    printf("color bits per rect: %d\n", color_bits);
+    printf("palette size: %u (top colors only)\n", pal_size);
+    printf("palette index bits: %d\n", color_bits);
     printf("矩形数: %u\n", rect_count);
     printf("raw bytes: %zu\n", bw.size);
     printf("zlib bytes: %zu\n", compressed_size);
@@ -643,10 +700,23 @@ void ivr_to_bmp(const char *ivr_filename, const char *bmp_filename) {
 
     int color_bits = bits_needed(pal_size);
     Rect *rects = (Rect *)malloc(rect_count * sizeof(Rect));
+
     for (uint32_t i = 0; i < rect_count; i++) {
         rects[i].w = br_read_exp_golomb(&br);
         rects[i].h = br_read_exp_golomb(&br);
-        rects[i].c_idx = br_read_bits(&br, color_bits);
+
+        rects[i].is_palette = br_read_bit(&br);
+
+        if (rects[i].is_palette) {
+            rects[i].pal_idx = (uint16_t)br_read_bits(&br, color_bits);
+            rects[i].color =
+                (palette[rects[i].pal_idx].r << 16) |
+                (palette[rects[i].pal_idx].g << 8) |
+                (palette[rects[i].pal_idx].b);
+        } else {
+            rects[i].color = br_read_bits(&br, 24);
+            rects[i].pal_idx = 0;
+        }
     }
     int decode_x_scale = 1; // This is not a scallop, it's a scaling.
     int decode_y_scale = 1; // This is not a scallop, it's a scaling.
@@ -673,7 +743,7 @@ void ivr_to_bmp(const char *ivr_filename, const char *bmp_filename) {
 int main() {
     const char *bmp_input = "googlehome.bmp";
     const char *ivr_output = "test.ivr";
-    const char *bmp_restored = "test.bmp";
+    const char *bmp_restored = "test512.bmp";
 
     bmp_to_ivr(bmp_input, ivr_output);
     ivr_to_bmp(ivr_output, bmp_restored);
