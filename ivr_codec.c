@@ -644,15 +644,15 @@ void ivr_to_bmp(const char *ivr_filename, const char *bmp_filename) {
         rects[i].h = br_read_exp_golomb(&br);
         rects[i].c_idx = br_read_bits(&br, color_bits);
     }
-    int decode_x_scall = 1;
-    int decode_y_scall = 1;
-    Image img = decode_image(rects, rect_count, palette, width, height,decode_x_scall,decode_y_scall);
+    int decode_x_scale = 4;
+    int decode_y_scale = 4;
+    Image img = decode_image(rects, rect_count, palette, width, height,decode_x_scale,decode_y_scale);
     clock_t t1 = clock();
 
     save_bmp(bmp_filename, img);
     clock_t t2 = clock();
 
-    printf("image size: %d x %d\n", width*decode_x_scall, height*decode_y_scall);
+    printf("image size: %d x %d\n", width*decode_x_scale, height*decode_y_scale);
     printf("展開時間: %.4f 秒\n", (double)(t1 - t0) / CLOCKS_PER_SEC);
     printf("BMP保存時間: %.4f 秒\n", (double)(t2 - t1) / CLOCKS_PER_SEC);
     printf("復元完了: %s\n", bmp_filename);
