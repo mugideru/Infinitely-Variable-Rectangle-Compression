@@ -7,9 +7,9 @@
 #include <time.h>
 #include <zlib.h>
 
-// =========================================================
+
 // データ構造の定義
-// =========================================================
+
 typedef struct {
     uint8_t *data;
     size_t capacity;
@@ -39,9 +39,7 @@ typedef struct {
     Color *pixels;
 } Image;
 
-// =========================================================
 // BitWriter / BitReader
-// =========================================================
 void bw_init(BitWriter *bw) {
     bw->capacity = 1024 * 1024; // 初期1MB
     bw->data = (uint8_t *)malloc(bw->capacity);
@@ -137,9 +135,7 @@ uint32_t br_read_exp_golomb(BitReader *br) {
     return value;
 }
 
-// =========================================================
 // 補助関数
-// =========================================================
 int bits_needed(uint32_t n) {
     if (n <= 1) return 1;
     return (int)ceil(log2((double)n));
@@ -151,9 +147,7 @@ int cmp_u32(const void *a, const void *b) {
     return (x > y) - (x < y);
 }
 
-// =========================================================
 // BMP読み書き（24bit専用）
-// =========================================================
 Image load_bmp(const char *filename) {
     FILE *f = fopen(filename, "rb");
     if (!f) { fprintf(stderr, "BMPを開けません: %s\n", filename); exit(1); }
@@ -238,9 +232,7 @@ void save_bmp(const char *filename, Image img) {
     fclose(f);
 }
 
-// =========================================================
 // zlib ユーティリティ
-// =========================================================
 uint8_t* zlib_compress_level9(const uint8_t *src, size_t src_len, size_t *out_len) {
     z_stream strm = {0};
     if (deflateInit(&strm, 9) != Z_OK) return NULL;
@@ -287,9 +279,7 @@ uint8_t* zlib_decompress_alloc(const uint8_t *src, size_t src_len, size_t *out_l
     return dest;
 }
 
-// =========================================================
 // パレット化・矩形エンコード・デコード
-// =========================================================
 void make_palette(Image img, Color **out_palette, uint32_t *out_pal_size, uint32_t **out_indexed) {
     int total_pixels = img.width * img.height;
     uint32_t *flat = (uint32_t *)malloc(total_pixels * sizeof(uint32_t));
@@ -426,11 +416,13 @@ Rect* encode_image(uint32_t *indexed, int w, int h, uint32_t *out_rect_count) {
     return rects;
 }
 
-Image decode_image(Rect *rects, uint32_t rect_count, Color *palette, int w, int h) {
+Image decode_image(Rect *rects, uint32_t rect_count, Color *palette,
+                          int w, int h, int scale_x, int scale_y) {
     Image img;
-    img.width = w;
-    img.height = h;
-    img.pixels = (Color *)malloc(w * h * sizeof(Color));
+    img.width = w * scale_x;
+    img.height = h * scale_y;
+    img.pixels = (Color *)malloc(img.width * img.height * sizeof(Color));
+
     uint8_t *used = (uint8_t *)calloc(w * h, sizeof(uint8_t));
 
     int curr_x = 0, curr_y = 0;
@@ -440,6 +432,7 @@ Image decode_image(Rect *rects, uint32_t rect_count, Color *palette, int w, int 
         uint32_t rh = rects[k].h;
         uint32_t ci = rects[k].c_idx;
 
+        // 元画像上の「次の未使用位置」を探す
         while (curr_y < h) {
             if (used[curr_y * w + curr_x] == 0) break;
             curr_x++;
@@ -451,10 +444,23 @@ Image decode_image(Rect *rects, uint32_t rect_count, Color *palette, int w, int 
         if (curr_y >= h) break;
 
         Color color = palette[ci];
-        for (int j = curr_y; j < curr_y + rh; j++) {
-            for (int i = curr_x; i < curr_x + rw; i++) {
-                img.pixels[j * w + i] = color;
+
+        // まず元画像上で使用済みにする
+        for (int j = curr_y; j < curr_y + (int)rh; j++) {
+            for (int i = curr_x; i < curr_x + (int)rw; i++) {
                 used[j * w + i] = 1;
+            }
+        }
+
+        // 拡大後画像へ直接描画
+        int dx0 = curr_x * scale_x;
+        int dy0 = curr_y * scale_y;
+        int dx1 = (curr_x + (int)rw) * scale_x;
+        int dy1 = (curr_y + (int)rh) * scale_y;
+
+        for (int y = dy0; y < dy1; y++) {
+            for (int x = dx0; x < dx1; x++) {
+                img.pixels[y * img.width + x] = color;
             }
         }
     }
@@ -463,9 +469,7 @@ Image decode_image(Rect *rects, uint32_t rect_count, Color *palette, int w, int 
     return img;
 }
 
-// =========================================================
 // IVR ファイル I/O
-// =========================================================
 void write_u32_le(FILE *f, uint32_t v) {
     uint8_t buf[4] = { v & 0xFF, (v >> 8) & 0xFF, (v >> 16) & 0xFF, (v >> 24) & 0xFF };
     fwrite(buf, 1, 4, f);
@@ -591,14 +595,15 @@ void ivr_to_bmp(const char *ivr_filename, const char *bmp_filename) {
         rects[i].h = br_read_exp_golomb(&br);
         rects[i].c_idx = br_read_bits(&br, color_bits);
     }
-
-    Image img = decode_image(rects, rect_count, palette, width, height);
+    int decode_x_scall = 1;
+    int decode_y_scall = 1;
+    Image img = decode_image(rects, rect_count, palette, width, height,decode_x_scall,decode_y_scall);
     clock_t t1 = clock();
 
     save_bmp(bmp_filename, img);
     clock_t t2 = clock();
 
-    printf("image size: %d x %d\n", width, height);
+    printf("image size: %d x %d\n", width*decode_x_scall, height*decode_y_scall);
     printf("展開時間: %.4f 秒\n", (double)(t1 - t0) / CLOCKS_PER_SEC);
     printf("BMP保存時間: %.4f 秒\n", (double)(t2 - t1) / CLOCKS_PER_SEC);
     printf("復元完了: %s\n", bmp_filename);
@@ -613,17 +618,10 @@ void ivr_to_bmp(const char *ivr_filename, const char *bmp_filename) {
 // テストメイン
 // =========================================================
 int main() {
-    const char *bmp_input = "bmp_tegami_Googled_copy.bmp";
-    const char *ivr_output = "tegami_Googled.ivr";
-    const char *bmp_restored = "tegami_bmp_restored.bmp";
+    const char *bmp_input = "sample-1pe.bmp";
+    const char *ivr_output = "test.ivr";
+    const char *bmp_restored = "test.bmp";
 
-    // Pythonの "__main__" ブロックと同様の処理
-    bmp_to_ivr(bmp_input, ivr_output);
-    ivr_to_bmp(ivr_output, bmp_restored);
-
-    printf("\n==================================================\n\n");
-
-    // 2回目計測
     bmp_to_ivr(bmp_input, ivr_output);
     ivr_to_bmp(ivr_output, bmp_restored);
 
