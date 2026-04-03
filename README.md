@@ -34,6 +34,19 @@ This repository includes:
 - Extremely effective on flat / low-color images
 - High compression when combined with zlib
 
+## Security Note
+
+IVR can generate very large output images from very small input files.
+Therefore, decoding or rendering untrusted IVR files without validation is unsafe.
+
+Implementations should enforce strict limits on:
+
+- maximum image dimensions
+- maximum scaling factors
+- maximum output pixel count
+- maximum rectangle count
+- overflow checks before memory allocation
+
 ---
 
 ## Core Idea
@@ -247,6 +260,19 @@ Imitate Vector Rendering
 - zlib と組み合わせることで高圧縮
 
 ---
+
+## Security Note
+
+IVR は非常に小さいデータから大きな出力画像を生成できるため、
+未検証のファイルをそのまま展開・表示するのは危険です。
+
+実装時は以下の制限を必ず設けてください：
+
+- 最大画像サイズ
+- 最大拡大率
+- 最大出力画素数
+- 最大矩形数
+- メモリ確保前のオーバーフロー検査
 
 ## 圧縮の考え方
 
