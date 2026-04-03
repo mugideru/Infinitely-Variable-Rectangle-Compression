@@ -741,7 +741,7 @@ void ivr_to_bmp(const char *ivr_filename, const char *bmp_filename) {
 // テストメイン
 // =========================================================
 int main() {
-    const char *bmp_input = "googlehome.bmp";
+    const char *bmp_input = "sample-1pe.bmp";
     const char *ivr_output = "test.ivr";
     const char *bmp_restored = "test512.bmp";
 
