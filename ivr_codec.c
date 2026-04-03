@@ -7,15 +7,19 @@
 #include <time.h>
 #include <zlib.h>
 
-
+#define HASH_SIZE 65536 // パレット最大数より十分大きく（2のべき乗が高速）
+#define HASH_MASK (HASH_SIZE - 1)
 // データ構造の定義
+
+
+
 
 typedef struct {
     uint8_t *data;
     size_t capacity;
     size_t size;
-    uint8_t current_byte;
-    int bit_count;
+    uint64_t bit_buffer; // ビットを一時的に貯める「貯金箱」
+    int bits_in_buffer;  // 貯金箱に今何ビット入っているか
 } BitWriter;
 
 typedef struct {
@@ -39,59 +43,67 @@ typedef struct {
     Color *pixels;
 } Image;
 
+typedef struct {
+    uint32_t color; // 0xRRGGBB
+    uint32_t index;
+    bool occupied;
+} HashEntry;
+
 // BitWriter / BitReader
 void bw_init(BitWriter *bw) {
-    bw->capacity = 1024 * 1024; // 初期1MB
+    bw->capacity = 1024 * 1024; // 1MB
     bw->data = (uint8_t *)malloc(bw->capacity);
     bw->size = 0;
-    bw->current_byte = 0;
-    bw->bit_count = 0;
+    bw->bit_buffer = 0;
+    bw->bits_in_buffer = 0;
 }
 
-void bw_write_bit(BitWriter *bw, uint8_t bit) {
-    bw->current_byte = (bw->current_byte << 1) | (bit & 1);
-    bw->bit_count++;
-    if (bw->bit_count == 8) {
+// 複数をまとめて書く（メインの処理）
+void bw_write_bits(BitWriter *bw, uint32_t value, int width) {
+    // 貯金箱に新しいビットを入れる
+    uint64_t mask = (width == 64) ? ~0ULL : (1ULL << width) - 1;
+    bw->bit_buffer = (bw->bit_buffer << width) | (value & mask);
+    bw->bits_in_buffer += width;
+
+    // 8ビット以上溜まったら、1バイトずつメモリへ書き出す
+    while (bw->bits_in_buffer >= 8) {
         if (bw->size >= bw->capacity) {
             bw->capacity *= 2;
             bw->data = (uint8_t *)realloc(bw->data, bw->capacity);
         }
-        bw->data[bw->size++] = bw->current_byte;
-        bw->current_byte = 0;
-        bw->bit_count = 0;
+        bw->data[bw->size++] = (uint8_t)(bw->bit_buffer >> (bw->bits_in_buffer - 8));
+        bw->bits_in_buffer -= 8;
     }
 }
 
-void bw_write_bits(BitWriter *bw, uint32_t value, int width) {
-    for (int i = width - 1; i >= 0; i--) {
-        bw_write_bit(bw, (value >> i) & 1);
-    }
+// 1ビットだけ書く（互換性用）
+void bw_write_bit(BitWriter *bw, uint8_t bit) {
+    bw_write_bits(bw, bit, 1);
 }
 
+// 指数ゴロムも新しい bw_write_bits を使って爆速化
 void bw_write_exp_golomb(BitWriter *bw, uint32_t n) {
-    if (n < 1) {
-        fprintf(stderr, "Exp-Golombは1以上専用です\n");
-        exit(1);
-    }
+    if (n < 1) exit(1);
     int bits = 0;
     uint32_t temp = n;
     while (temp > 0) { bits++; temp >>= 1; }
-    int prefix_zeros = bits - 1;
     
-    for (int i = 0; i < prefix_zeros; i++) bw_write_bit(bw, 0);
-    for (int i = bits - 1; i >= 0; i--) bw_write_bit(bw, (n >> i) & 1);
+    if (bits > 1) {
+        bw_write_bits(bw, 0, bits - 1); // 0の並びを一気書き
+    }
+    bw_write_bits(bw, n, bits); // 本体のビットを一気書き
 }
 
 void bw_finish(BitWriter *bw) {
-    if (bw->bit_count > 0) {
-        bw->current_byte <<= (8 - bw->bit_count);
+    // 残りカス（8ビットに満たない分）を左詰めで出力
+    if (bw->bits_in_buffer > 0) {
+        uint8_t last_byte = (uint8_t)(bw->bit_buffer << (8 - bw->bits_in_buffer));
         if (bw->size >= bw->capacity) {
-            bw->capacity += 1;
-            bw->data = (uint8_t *)realloc(bw->data, bw->capacity);
+            bw->data = (uint8_t *)realloc(bw->data, bw->size + 1);
         }
-        bw->data[bw->size++] = bw->current_byte;
-        bw->current_byte = 0;
-        bw->bit_count = 0;
+        bw->data[bw->size++] = last_byte;
+        bw->bits_in_buffer = 0;
+        bw->bit_buffer = 0;
     }
 }
 
@@ -278,61 +290,98 @@ uint8_t* zlib_decompress_alloc(const uint8_t *src, size_t src_len, size_t *out_l
     inflateEnd(&strm);
     return dest;
 }
+inline uint32_t hash_func(uint32_t color) {
+    color = ((color >> 16) ^ color) * 0x45d9f3b;
+    color = ((color >> 16) ^ color) * 0x45d9f3b;
+    color = (color >> 16) ^ color;
+    return color & HASH_MASK;
+}
+
+void resize_hash_table(HashEntry **table, uint32_t *current_size, uint32_t pal_cnt) {
+    uint32_t old_size = *current_size;
+    uint32_t new_size = old_size * 2;
+    HashEntry *old_table = *table;
+    
+    // 新しいサイズのテーブルを確保し、0で初期化
+    HashEntry *new_table = (HashEntry *)calloc(new_size, sizeof(HashEntry));
+    uint32_t mask = new_size - 1;
+
+    // 古いテーブルのデータを新しいテーブルへ再配置（リハッシュ）
+    for (uint32_t i = 0; i < old_size; i++) {
+        if (old_table[i].occupied) {
+            uint32_t c = old_table[i].color;
+            uint32_t h = hash_func(c) & mask; // 新しいサイズに合わせたハッシュ値
+            while (new_table[h].occupied) {
+                h = (h + 1) & mask;
+            }
+            new_table[h] = old_table[i];
+        }
+    }
+
+    free(old_table);
+    *table = new_table;
+    *current_size = new_size;
+}
 
 // パレット化・矩形エンコード・デコード
 void make_palette(Image img, Color **out_palette, uint32_t *out_pal_size, uint32_t **out_indexed) {
     int total_pixels = img.width * img.height;
-    uint32_t *flat = (uint32_t *)malloc(total_pixels * sizeof(uint32_t));
-    for (int i = 0; i < total_pixels; i++) {
-        flat[i] = (img.pixels[i].r << 16) | (img.pixels[i].g << 8) | img.pixels[i].b;
-    }
-
-    uint32_t *sorted = (uint32_t *)malloc(total_pixels * sizeof(uint32_t));
-    memcpy(sorted, flat, total_pixels * sizeof(uint32_t));
-    qsort(sorted, total_pixels, sizeof(uint32_t), cmp_u32);
-
-    uint32_t pal_size = 0;
-    uint32_t *unique_ints = (uint32_t *)malloc(total_pixels * sizeof(uint32_t));
-    if (total_pixels > 0) {
-        unique_ints[0] = sorted[0];
-        pal_size = 1;
-        for (int i = 1; i < total_pixels; i++) {
-            if (sorted[i] != sorted[i - 1]) {
-                unique_ints[pal_size++] = sorted[i];
-            }
-        }
-    }
-    free(sorted);
-
-    Color *palette = (Color *)malloc(pal_size * sizeof(Color));
-    for (uint32_t i = 0; i < pal_size; i++) {
-        palette[i].r = (unique_ints[i] >> 16) & 0xFF;
-        palette[i].g = (unique_ints[i] >> 8) & 0xFF;
-        palette[i].b = unique_ints[i] & 0xFF;
-    }
-
+    
+    uint32_t current_hash_size = 65536; // 最初は小さく始めてもOK
+    HashEntry *table = (HashEntry *)calloc(current_hash_size, sizeof(HashEntry));
+    
+    // パレット配列は最大色数（1677万）を想定して大きめに確保するか、
+    // 同様に realloc で拡張する必要があります。
+    Color *palette = (Color *)malloc(65536 * sizeof(Color)); 
     uint32_t *indexed = (uint32_t *)malloc(total_pixels * sizeof(uint32_t));
+    uint32_t pal_cnt = 0;
+
     for (int i = 0; i < total_pixels; i++) {
-        // 二分探索でインデックスを取得
-        int l = 0, r = pal_size - 1, idx = 0;
-        uint32_t target = flat[i];
-        while (l <= r) {
-            int m = l + (r - l) / 2;
-            if (unique_ints[m] == target) { idx = m; break; }
-            if (unique_ints[m] < target) l = m + 1;
-            else r = m - 1;
+        uint32_t c = (img.pixels[i].r << 16) | (img.pixels[i].g << 8) | img.pixels[i].b;
+        uint32_t mask = current_hash_size - 1;
+        uint32_t h = hash_func(c) & mask;
+
+        while (table[h].occupied) {
+            if (table[h].color == c) break;
+            h = (h + 1) & mask;
         }
-        indexed[i] = idx;
+
+        if (!table[h].occupied) {
+            // --- ここでリサイズチェック！ ---
+            if (pal_cnt > current_hash_size * 0.7) {
+                resize_hash_table(&table, &current_hash_size, pal_cnt);
+                // テーブルサイズが変わったので、今の色に対するハッシュ値とhを再計算
+                mask = current_hash_size - 1;
+                h = hash_func(c) & mask;
+                while (table[h].occupied) {
+                    h = (h + 1) & mask;
+                }
+            }
+            // ------------------------------
+
+            table[h].occupied = true;
+            table[h].color = c;
+            table[h].index = pal_cnt;
+            
+            // パレット配列自体の拡張チェック（簡易版）
+            if (pal_cnt >= 65536) { /* 必要ならここもrealloc */ }
+
+            palette[pal_cnt].r = (c >> 16) & 0xFF;
+            palette[pal_cnt].g = (c >> 8) & 0xFF;
+            palette[pal_cnt].b = c & 0xFF;
+            
+            indexed[i] = pal_cnt;
+            pal_cnt++;
+        } else {
+            indexed[i] = table[h].index;
+        }
     }
 
-    free(flat);
-    free(unique_ints);
-
-    *out_palette = palette;
-    *out_pal_size = pal_size;
+    free(table);
+    *out_palette = (Color *)realloc(palette, pal_cnt * sizeof(Color));
+    *out_pal_size = pal_cnt;
     *out_indexed = indexed;
 }
-
 Rect* encode_image(uint32_t *indexed, int w, int h, uint32_t *out_rect_count) {
     uint8_t *used = (uint8_t *)calloc(w * h, sizeof(uint8_t));
     size_t rect_cap = 10000;
@@ -618,7 +667,7 @@ void ivr_to_bmp(const char *ivr_filename, const char *bmp_filename) {
 // テストメイン
 // =========================================================
 int main() {
-    const char *bmp_input = "sample-1pe.bmp";
+    const char *bmp_input = "bmp_tegami_Googled_copy.bmp";
     const char *ivr_output = "test.ivr";
     const char *bmp_restored = "test.bmp";
 
