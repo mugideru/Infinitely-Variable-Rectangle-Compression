@@ -3,7 +3,7 @@ rem --- 1. コンパイルを実行 ---
 echo Compiling...
 
 rem 変更点： "> nul" で通常ログを非表示にし、 "2>&1" を付けないことでエラーだけ表示させます
-cl ivr_codec.c zlib\*.c /O2 /MT /I. /Izlib /Fe:ivr_converter.exe /utf-8 > nul && (
+cl ivr_codec.c zlib\*.c /O2 /MT /I. /Izlib /Fe:ivr_converter.exe /utf-8 && (
     rem --- 2. コンパイルが成功した場合 ---
     echo.
     echo Compilation Succeeded! Running converter.exe...
