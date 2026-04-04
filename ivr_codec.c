@@ -5,7 +5,7 @@
 #include <string.h>
 #include <math.h>
 #include <time.h>
-#include <zlib.h>
+#include <zstd.h>  // zlib.h から差し替え
 
 #ifdef _WIN32
 #include <fcntl.h>
@@ -220,54 +220,32 @@ static Image load_bmp(const char *filename) {
 
 // --- zlib ユーティリティ ---
 
-static uint8_t* zlib_compress_level9(const uint8_t *src, size_t src_len, size_t *out_len) {
-    z_stream strm = {0};
-    if (deflateInit(&strm, 9) != Z_OK) return NULL;
-    
-    size_t cap = deflateBound(&strm, src_len);
+static uint8_t* zstd_compress_optimized(const uint8_t *src, size_t src_len, size_t *out_len) {
+    size_t const cap = ZSTD_compressBound(src_len);
     uint8_t *dest = (uint8_t *)malloc(cap);
+    if (!dest) return NULL;
+
+    // 圧縮レベル 19 は高圧縮ですが、デコード速度は速いまま維持されます
+    size_t const c_size = ZSTD_compress(dest, cap, src, src_len, 19);
     
-    strm.next_in = (z_const Bytef *)src;
-    strm.avail_in = (uInt)src_len;
-    strm.next_out = dest;
-    strm.avail_out = (uInt)cap;
-    
-    deflate(&strm, Z_FINISH);
-    *out_len = strm.total_out;
-    deflateEnd(&strm);
+    if (ZSTD_isError(c_size)) {
+        free(dest);
+        return NULL;
+    }
+    *out_len = c_size;
     return dest;
 }
 
-static uint8_t* zlib_decompress_alloc(const uint8_t *src, size_t src_len, size_t *out_len) {
-    size_t cap = src_len * 4 + 8192;
-    uint8_t *dest = (uint8_t *)malloc(cap);
-    z_stream strm = {0};
-    strm.next_in = (z_const Bytef *)src;
-    strm.avail_in = (uInt)src_len;
+static uint8_t* zstd_decompress_optimized(const uint8_t *src, size_t src_len, size_t expected_sz) {
+    uint8_t *dest = (uint8_t *)malloc(expected_sz);
+    if (!dest) return NULL;
+
+    size_t const d_size = ZSTD_decompress(dest, expected_sz, src, src_len);
     
-    if (inflateInit(&strm) != Z_OK) { 
-        free(dest); 
-        return NULL; 
+    if (ZSTD_isError(d_size)) {
+        free(dest);
+        return NULL;
     }
-
-    do {
-        strm.next_out = dest + strm.total_out;
-        strm.avail_out = (uInt)(cap - strm.total_out);
-        int ret = inflate(&strm, Z_NO_FLUSH);
-        if (ret == Z_STREAM_END) break;
-        if (ret != Z_OK && ret != Z_BUF_ERROR) {
-            inflateEnd(&strm); 
-            free(dest); 
-            return NULL;
-        }
-        if (strm.avail_out == 0) {
-            cap *= 2;
-            dest = (uint8_t *)realloc(dest, cap);
-        }
-    } while (1);
-
-    *out_len = strm.total_out;
-    inflateEnd(&strm);
     return dest;
 }
 
@@ -510,40 +488,37 @@ static uint32_t read_u32_le(FILE *f) {
 }
 
 static void bmp_to_ivr(const char *bmp_filename, const char *ivr_filename) {
-    fprintf(stderr, "=== BMP -> IVR ===\n");
-    Image img = load_bmp(bmp_filename);
-    if (!img.pixels) {
-        fprintf(stderr, "BMPファイルの読み込みに失敗しました\n");
-        return;
-    }
-    fprintf(stderr, "image size: %d x %d\n", img.width, img.height);
+    fprintf(stderr, "=== BMP -> IVR ===\n\n");
+    clock_t t_start = clock();
 
-    clock_t t0 = clock();
+    Image img = load_bmp(bmp_filename);
+    if (!img.pixels) return;
+    fprintf(stderr, "image size: %d x %d\n\n", img.width, img.height);
+
+    clock_t t1 = clock();
     Color *palette;
     uint32_t pal_size;
     uint32_t *indexed;
     make_palette(img, &palette, &pal_size, &indexed);
-    clock_t t1 = clock();
+    clock_t t2 = clock();
+    fprintf(stderr, "パレット作成時間: %.4f 秒\n\n", (double)(t2 - t1) / CLOCKS_PER_SEC);
 
+    clock_t t3 = clock();
     uint32_t rect_count;
     Rect *rects = encode_image(indexed, img.width, img.height, &rect_count);
+    clock_t t4 = clock();
+    fprintf(stderr, "エンコード時間:   %.4f 秒\n\n", (double)(t4 - t3) / CLOCKS_PER_SEC);
 
     BitWriter bw;
     bw_init(&bw);
     bw_write_exp_golomb(&bw, pal_size);
     bw_write_exp_golomb(&bw, rect_count);
 
-    // パレットの書き出し（差分符号化）
     Color last_c = {0, 0, 0};
     for (uint32_t i = 0; i < pal_size; i++) {
-        uint8_t dr = palette[i].r - last_c.r;
-        uint8_t dg = palette[i].g - last_c.g;
-        uint8_t db = palette[i].b - last_c.b;
-
-        bw_write_bits(&bw, dr, 8);
-        bw_write_bits(&bw, dg, 8);
-        bw_write_bits(&bw, db, 8);
-
+        bw_write_bits(&bw, (uint8_t)(palette[i].r - last_c.r), 8);
+        bw_write_bits(&bw, (uint8_t)(palette[i].g - last_c.g), 8);
+        bw_write_bits(&bw, (uint8_t)(palette[i].b - last_c.b), 8);
         last_c = palette[i]; 
     }
 
@@ -556,82 +531,64 @@ static void bmp_to_ivr(const char *bmp_filename, const char *ivr_filename) {
     bw_finish(&bw);
 
     size_t compressed_size;
-    uint8_t *compressed = zlib_compress_level9(bw.data, bw.size, &compressed_size);
-    clock_t t2 = clock();
+    uint8_t *compressed = zstd_compress_optimized(bw.data, bw.size, &compressed_size);
 
+    clock_t t5 = clock();
     FILE *out = fopen(ivr_filename, "wb");
     if (out) {
-        fwrite("IVR1", 1, 4, out);
+        fwrite("IVR1", 1, 4, out);      
         write_u32_le(out, img.width);
         write_u32_le(out, img.height);
+        write_u32_le(out, (uint32_t)bw.size);
         fwrite(compressed, 1, compressed_size, out);
         fclose(out);
     }
-    clock_t t3 = clock();
+    clock_t t6 = clock();
+    fprintf(stderr, "保存時間:         %.4f 秒\n", (double)(t6 - t5) / CLOCKS_PER_SEC);
 
-    fprintf(stderr, "パレット作成時間: %.4f 秒\n", (double)(t1 - t0) / CLOCKS_PER_SEC);
-    fprintf(stderr, "エンコード時間:   %.4f 秒\n", (double)(t2 - t1) / CLOCKS_PER_SEC);
-    fprintf(stderr, "保存時間:         %.4f 秒\n", (double)(t3 - t2) / CLOCKS_PER_SEC);
-    fprintf(stderr, "----------------------------------------\n");
-    fprintf(stderr, "palette size: %u\n", pal_size);
+    fprintf(stderr, "\npalette size: %u\n", pal_size);
     fprintf(stderr, "color bits per rect: %d\n", color_bits);
     fprintf(stderr, "矩形数: %u\n", rect_count);
     fprintf(stderr, "raw bytes: %zu\n", bw.size);
-    fprintf(stderr, "zlib bytes: %zu\n", compressed_size);
-    fprintf(stderr, "----------------------------------------\n");
+    fprintf(stderr, "Zstd bytes: %zu\n\n", compressed_size);
 
-    free(img.pixels);
-    free(palette);
-    free(indexed);
-    free(rects);
-    free(bw.data);
-    free(compressed);
+    free(img.pixels); free(palette); free(indexed); free(rects);
+    free(bw.data); free(compressed);
 }
 
 static Image ivr_to_image(const char *ivr_in, int sx, int sy) {
-    fprintf(stderr, "=== IVR -> Decoding ===\n");
-    clock_t t_start = clock();
+    fprintf(stderr, "=== IVR -> Decoding ===\n\n");
+    clock_t t0 = clock();
 
     FILE *f = fopen(ivr_in, "rb");
-    if (!f) {
-        fprintf(stderr, "エラー: IVRファイルを開けません: %s\n", ivr_in);
-        return (Image){0, 0, NULL};
-    }
+    if (!f) return (Image){0, 0, NULL};
     
     uint8_t magic[4];
     if (fread(magic, 1, 4, f) != 4 || memcmp(magic, "IVR1", 4) != 0) {
-        fprintf(stderr, "エラー: 正しいIVRファイルではありません\n");
-        fclose(f);
-        return (Image){0, 0, NULL};
+        fprintf(stderr, "エラー: Zstd形式のIVRファイルではありません\n");
+        fclose(f); return (Image){0, 0, NULL};
     }
     
     uint32_t w = read_u32_le(f);
     uint32_t h = read_u32_le(f);
+    uint32_t raw_size = read_u32_le(f);
     
+    long current_pos = ftell(f);
     fseek(f, 0, SEEK_END);
-    long file_size = ftell(f);
-    size_t z_sz = (size_t)file_size - 12;
-    fseek(f, 12, SEEK_SET);
+    size_t z_sz = (size_t)ftell(f) - current_pos;
+    fseek(f, current_pos, SEEK_SET);
     
     uint8_t *z_buf = (uint8_t *)malloc(z_sz);
-    if (fread(z_buf, 1, z_sz, f) != z_sz) {
-        free(z_buf);
-        fclose(f);
-        return (Image){0, 0, NULL};
-    }
+    fread(z_buf, 1, z_sz, f);
     fclose(f);
     
-    size_t raw_sz;
-    uint8_t *raw = zlib_decompress_alloc(z_buf, z_sz, &raw_sz);
+    uint8_t *raw = zstd_decompress_optimized(z_buf, z_sz, raw_size);
     free(z_buf);
     
-    if (!raw) {
-        fprintf(stderr, "エラー: zlib展開に失敗しました\n");
-        return (Image){0, 0, NULL};
-    }
+    if (!raw) return (Image){0, 0, NULL};
 
     BitReader br; 
-    br_init(&br, raw, raw_sz);
+    br_init(&br, raw, raw_size);
     uint32_t pal_sz = br_read_exp_golomb(&br);
     uint32_t rect_cnt = br_read_exp_golomb(&br);
     
@@ -652,20 +609,13 @@ static Image ivr_to_image(const char *ivr_in, int sx, int sy) {
         rects[i].c_idx = br_read_bits(&br, c_bits);
     }
     
-    // 矩形からピクセルへの展開
     Image img = decode_image(rects, rect_cnt, pal, w, h, sx, sy);
-    
-    clock_t t_end = clock();
-    double duration = (double)(t_end - t_start) / CLOCKS_PER_SEC;
+    clock_t t1 = clock();
 
-    fprintf(stderr, "----------------------------------------\n");
-    fprintf(stderr, "デコード時間: %.4f 秒\n", duration);
-    fprintf(stderr, "展開後サイズ: %d x %d (Scale: %dx%d)\n", img.width, img.height, sx, sy);
-    fprintf(stderr, "----------------------------------------\n");
+    fprintf(stderr, "デコード時間: %.4f 秒\n", (double)(t1 - t0) / CLOCKS_PER_SEC);
+    fprintf(stderr, "展開後サイズ: %d x %d (Scale: %dx%d)\n\n", img.width, img.height, sx, sy);
     
-    free(raw); 
-    free(pal); 
-    free(rects);
+    free(raw); free(pal); free(rects);
     return img;
 }
 
