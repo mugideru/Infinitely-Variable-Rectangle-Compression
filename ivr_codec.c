@@ -340,10 +340,11 @@ void resize_hash_table(HashEntry **table, uint32_t *current_size, uint32_t pal_c
 // パレット化・矩形エンコード・デコード
 void make_palette(Image img, Color **out_palette, uint32_t *out_pal_size, uint32_t **out_indexed) {
     int total_pixels = img.width * img.height;
-    uint32_t current_hash_size = 65536;
+    uint32_t current_hash_size = 65536; // 初期サイズ
     HashEntry *table = (HashEntry *)calloc(current_hash_size, sizeof(HashEntry));
     
-    Color *palette = (Color *)malloc(65536 * sizeof(Color)); 
+    uint32_t palette_cap = 65536; // パレット自体のキャパシティ
+    Color *palette = (Color *)malloc(palette_cap * sizeof(Color)); 
     uint32_t *indexed = (uint32_t *)malloc(total_pixels * sizeof(uint32_t));
     uint32_t pal_cnt = 0;
 
@@ -352,12 +353,29 @@ void make_palette(Image img, Color **out_palette, uint32_t *out_pal_size, uint32
         uint32_t mask = current_hash_size - 1;
         uint32_t h = hash_func(c) & mask;
 
+        // ハッシュ衝突の解決
         while (table[h].occupied) {
             if (table[h].color == c) break;
             h = (h + 1) & mask;
         }
 
         if (!table[h].occupied) {
+            if (pal_cnt > current_hash_size * 0.7) {
+                resize_hash_table(&table, &current_hash_size, pal_cnt);
+                mask = current_hash_size - 1; // マスクを更新
+                // リサイズ後にハッシュ位置を再計算
+                h = hash_func(c) & mask;
+                while (table[h].occupied) {
+                    h = (h + 1) & mask;
+                }
+            }
+
+            // --- パレット自体の配列も足りなくなったらリサイズ ---
+            if (pal_cnt >= palette_cap) {
+                palette_cap *= 2;
+                palette = (Color *)realloc(palette, palette_cap * sizeof(Color));
+            }
+
             table[h].occupied = true;
             table[h].color = c;
             table[h].index = pal_cnt;
@@ -373,7 +391,7 @@ void make_palette(Image img, Color **out_palette, uint32_t *out_pal_size, uint32
         }
     }
     free(table);
-    
+
     *out_palette = (Color *)realloc(palette, pal_cnt * sizeof(Color));
     *out_pal_size = pal_cnt;
     *out_indexed = indexed;
@@ -680,7 +698,7 @@ void ivr_to_bmp(const char *ivr_filename, const char *bmp_filename) {
 // テストメイン
 // =========================================================
 int main() {
-    const char *bmp_input = "mirionn.bmp";
+    const char *bmp_input = "random_mosaic.bmp";
     const char *ivr_output = "test.ivr";
     const char *bmp_restored = "test.bmp";
 
