@@ -12,8 +12,8 @@ typedef struct {
     uint8_t *data;
     size_t capacity;
     size_t size;
-    uint64_t bit_buffer; // ビットを一時的に貯める「貯金箱」
-    int bits_in_buffer;  // 貯金箱に今何ビット入っているか
+    uint64_t bit_buffer;
+    int bits_in_buffer;  
 } BitWriter;
 
 typedef struct {
@@ -245,7 +245,7 @@ void save_bmp(const char *filename, Image img) {
     fwrite(header, 1, 54, f);
 
     uint8_t *row_buf = (uint8_t *)calloc(1, row_size);
-    for (int y = img.height - 1; y >= 0; y--) { // 下から上へ
+    for (int y = img.height - 1; y >= 0; y--) { 
         for (int x = 0; x < img.width; x++) {
             Color c = img.pixels[y * img.width + x];
             row_buf[x * 3 + 0] = c.b;
@@ -324,7 +324,7 @@ void resize_hash_table(HashEntry **table, uint32_t *current_size, uint32_t pal_c
     for (uint32_t i = 0; i < old_size; i++) {
         if (old_table[i].occupied) {
             uint32_t c = old_table[i].color;
-            uint32_t h = hash_func(c) & mask; // 新しいサイズに合わせたハッシュ値
+            uint32_t h = hash_func(c) & mask; 
             while (new_table[h].occupied) {
                 h = (h + 1) & mask;
             }
@@ -358,7 +358,6 @@ void make_palette(Image img, Color **out_palette, uint32_t *out_pal_size, uint32
         }
 
         if (!table[h].occupied) {
-            // (リサイズ処理などは省略せず維持...)
             table[h].occupied = true;
             table[h].color = c;
             table[h].index = pal_cnt;
@@ -374,8 +373,7 @@ void make_palette(Image img, Color **out_palette, uint32_t *out_pal_size, uint32
         }
     }
     free(table);
-
-    // ソートしないなら、ここで即座に結果を返してOK
+    
     *out_palette = (Color *)realloc(palette, pal_cnt * sizeof(Color));
     *out_pal_size = pal_cnt;
     *out_indexed = indexed;
