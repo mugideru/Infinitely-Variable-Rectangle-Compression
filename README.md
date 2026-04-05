@@ -5,8 +5,6 @@
 
 -----
 
-\<a name="english"\>\</a\>
-
 ## English
 
 IVR is a **high-speed, lossless image compression format** that represents images as a sequence of optimized, same-color rectangles. It occupies a unique niche between traditional raster formats (like PNG) and vector-like structured data.
