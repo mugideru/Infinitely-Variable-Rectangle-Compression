@@ -5,15 +5,12 @@
 #include <string.h>
 #include <math.h>
 #include <time.h>
-#include <zstd.h>  // zlib.h から差し替え
-
+#include <zstd.h>  
 #ifdef _WIN32
 #include <fcntl.h>
 #include <io.h>
 #endif
-
 // --- データ構造定義 ---
-
 typedef struct {
     uint8_t *data;
     size_t capacity;
@@ -27,7 +24,7 @@ typedef struct {
     size_t size;
     size_t byte_pos;
     int bit_pos;
-    bool eof; // 追加: ファイル終端検知用フラグ
+    bool eof; 
 } BitReader;
 
 typedef struct {
@@ -523,9 +520,17 @@ static void bmp_to_ivr(const char *bmp_filename, const char *ivr_filename) {
     }
 
     int color_bits = bits_needed(pal_size);
+
+    // まずは全ての w を書く
     for (uint32_t i = 0; i < rect_count; i++) {
         bw_write_exp_golomb(&bw, rects[i].w);
+    }
+    // 次に全ての h を書く
+    for (uint32_t i = 0; i < rect_count; i++) {
         bw_write_exp_golomb(&bw, rects[i].h);
+    }
+    // 最後に全ての c_idx を書く
+    for (uint32_t i = 0; i < rect_count; i++) {
         bw_write_bits(&bw, rects[i].c_idx, color_bits);
     }
     bw_finish(&bw);
@@ -545,7 +550,6 @@ static void bmp_to_ivr(const char *bmp_filename, const char *ivr_filename) {
     }
     clock_t t6 = clock();
     fprintf(stderr, "保存時間:         %.4f 秒\n", (double)(t6 - t5) / CLOCKS_PER_SEC);
-
     fprintf(stderr, "\npalette size: %u\n", pal_size);
     fprintf(stderr, "color bits per rect: %d\n", color_bits);
     fprintf(stderr, "矩形数: %u\n", rect_count);
@@ -603,12 +607,17 @@ static Image ivr_to_image(const char *ivr_in, int sx, int sy) {
     
     int c_bits = bits_needed(pal_sz);
     Rect *rects = (Rect *)malloc(rect_cnt * sizeof(Rect));
+
+    // 順番通りに復元
     for (uint32_t i = 0; i < rect_cnt; i++) {
         rects[i].w = br_read_exp_golomb(&br);
+    }
+    for (uint32_t i = 0; i < rect_cnt; i++) {
         rects[i].h = br_read_exp_golomb(&br);
+    }
+    for (uint32_t i = 0; i < rect_cnt; i++) {
         rects[i].c_idx = br_read_bits(&br, c_bits);
     }
-    
     Image img = decode_image(rects, rect_cnt, pal, w, h, sx, sy);
     clock_t t1 = clock();
 
