@@ -65,8 +65,6 @@ Since IVR can represent massive images with tiny file sizes (similar to a "zip b
 
 -----
 
-\<a name="japanese"\>\</a\>
-
 ## 日本語
 
 IVR (Infinitely Variable Rectangle) は、画像を「最適化された同色長方形の集合」として表現する、**超高速・可逆圧縮画像フォーマット**です。PNGのような従来のラスタ形式と、構造化データの利点を併せ持っています。
