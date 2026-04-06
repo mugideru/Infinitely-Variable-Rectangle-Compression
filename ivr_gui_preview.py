@@ -68,7 +68,7 @@ class IVRPreviewer(ctk.CTk):
         if not self.input_path: return
         sx, sy = int(self.slider_x.get()), int(self.slider_y.get())
         
-        exe = r"C:\create_file\ivr_project\ivr_converter.exe"
+        exe = r"C:\create_file\ivr_project\ivr_converter\target\release\ivr_converter.exe"
         cmd = [exe, self.input_path, self.ivr_path, str(sx), str(sy)]
 
         try:

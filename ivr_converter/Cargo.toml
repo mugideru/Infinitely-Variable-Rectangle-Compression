@@ -1,0 +1,15 @@
+[package]
+name = "ivr_converter"
+version = "0.1.0"
+edition = "2024"
+[profile.release]
+opt-level = 3          # /O3 に相当
+lto = true             # /GL /LTCG (リンク時最適化) に相当
+codegen-units = 1      # 最適化効率を最大化
+panic = "abort"        # バイナリサイズ削減
+
+[build]
+# AVX2などのCPU命令セットを有効にする場合（環境変数でも可）
+# RUSTFLAGS="-C target-cpu=haswell" 相当
+[dependencies]
+zstd = "0.13"
