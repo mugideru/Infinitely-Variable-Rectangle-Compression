@@ -457,55 +457,6 @@ fn decode_image(rects: &[Rect], palette: &[Color], w: u32, h: u32, scale_x: u32,
 
 // --- IVR ファイル I/O ---
 
-fn bmp_to_ivr(bmp_filename: &str, ivr_filename: &str) -> io::Result<()> {
-    eprintln!("=== BMP -> IVR ===\n");
-
-    let img = load_bmp(bmp_filename)?;
-    eprintln!("image size: {} x {}\n", img.width, img.height);
-
-    let t1 = Instant::now();
-    let (palette, indexed) = make_palette(&img);
-    eprintln!("パレット作成時間: {:.4} 秒\n", t1.elapsed().as_secs_f64());
-
-    let t3 = Instant::now();
-    let rects = encode_image(&indexed, img.width, img.height);
-    eprintln!("エンコード時間:   {:.4} 秒\n", t3.elapsed().as_secs_f64());
-
-    let mut bw = BitWriter::new();
-    bw.write_exp_golomb(palette.len() as u32);
-    bw.write_exp_golomb(rects.len() as u32);
-
-    let mut last_c = Color::default();
-    for p in &palette {
-        bw.write_bits(p.r.wrapping_sub(last_c.r) as u32, 8);
-        bw.write_bits(p.g.wrapping_sub(last_c.g) as u32, 8);
-        bw.write_bits(p.b.wrapping_sub(last_c.b) as u32, 8);
-        last_c = *p;
-    }
-
-    let color_bits = bits_needed(palette.len() as u32);
-    for r in &rects { bw.write_exp_golomb(r.w); }
-    for r in &rects { bw.write_exp_golomb(r.h); }
-    for r in &rects { bw.write_bits(r.c_idx, color_bits); }
-    bw.finish();
-
-    let compressed = zstd::stream::encode_all(bw.data.as_slice(), ZSTD_COMPRESSION_LEVEL)?;
-
-    let mut out = File::create(ivr_filename)?;
-    out.write_all(b"IVR1")?;
-    out.write_all(&img.width.to_le_bytes())?;
-    out.write_all(&img.height.to_le_bytes())?;
-    out.write_all(&(bw.data.len() as u32).to_le_bytes())?;
-    out.write_all(&compressed)?;
-
-    eprintln!(
-        "\npalette size: {}\n矩形数: {}\nRaw bytes: {}\nZstd bytes: {}\n",
-        palette.len(), rects.len(), bw.data.len(), compressed.len()
-    );
-
-    Ok(())
-}
-
 fn ivr_to_image(ivr_in: &str, sx: u32, sy: u32) -> io::Result<Image> {
     eprintln!("=== IVR -> Decoding ===\n");
     let t0 = Instant::now();

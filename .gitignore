@@ -10,11 +10,8 @@
 !README.md
 !LICENSE
 !.gitignore
-!build.bat
 
 # C版やPython版などのソース
-!ivr_codec.c
-!ivr_gui_preview.py
 
 # ==========================================
 # 3. ivr_converter (Rust本体など) フォルダの設定
