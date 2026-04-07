@@ -1,0 +1,70 @@
+# ==========================================
+# 1. すべてを無視 (ホワイトリスト開始)
+# ==========================================
+*
+!*/
+
+# ==========================================
+# 2. ルート直下の共通ファイルを許可
+# ==========================================
+!README.md
+!LICENSE
+!.gitignore
+!build.bat
+
+# C版やPython版などのソース
+!ivr_codec.c
+!ivr_gui_preview.py
+
+# ==========================================
+# 3. ivr_converter (Rust本体など) フォルダの設定
+# ==========================================
+!ivr_converter/
+!ivr_converter/src/**
+!ivr_converter/Cargo.toml
+!ivr_converter/Cargo.lock
+
+# ==========================================
+# 4. ivr-previewer (Tauriプロジェクト) フォルダの設定
+# ==========================================
+!ivr-previewer/
+!ivr-previewer/package.json
+!ivr-previewer/package-lock.json
+!ivr-previewer/tsconfig.json
+!ivr-previewer/vite.config.ts
+!ivr-previewer/index.html
+
+# フロントエンドのソース
+!ivr-previewer/src/
+!ivr-previewer/src/**
+
+# Tauri (Rust側) のソース
+!ivr-previewer/src-tauri/
+!ivr-previewer/src-tauri/src/
+!ivr-previewer/src-tauri/src/**
+!ivr-previewer/src-tauri/capabilities/
+!ivr-previewer/src-tauri/capabilities/**
+!ivr-previewer/src-tauri/icons/
+!ivr-previewer/src-tauri/icons/**
+!ivr-previewer/src-tauri/Cargo.toml
+!ivr-previewer/src-tauri/Cargo.lock
+!ivr-previewer/src-tauri/tauri.conf.json
+
+# ==========================================
+# 5. 明示的に除外するもの (ブラックリスト)
+# ==========================================
+# Rustのビルド生成物
+**/target/
+
+# Node.jsのライブラリ
+**/node_modules/
+
+# フロントエンドのビルド成果物
+ivr-previewer/dist/
+
+# エディタ設定・キャッシュ
+.vscode/
+.idea/
+.DS_Store
+*.log
+ivr-previewer/src-tauri/.bundle/

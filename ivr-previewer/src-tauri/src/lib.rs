@@ -239,6 +239,9 @@ fn load_bmp(filename: &str) -> io::Result<Image> {
 
     // Skip to pixel data
     let mut skip = vec![0u8; (pixel_offset - 54) as usize];
+    if pixel_offset < 54 {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "Invalid BMP pixel offset"));
+    }
     f.read_exact(&mut skip)?;
 
     let mut pixels = vec![Color::default(); (width * height) as usize];
@@ -423,7 +426,9 @@ fn decode_image(rects: &[Rect], palette: &[Color], w: u32, h: u32, scale_x: u32,
         let rh = rect.h;
         let ci = rect.c_idx as usize;
 
-        if ci >= palette.len() || curr_x + rw > w || curr_y + rh > h { continue; }
+        if ci >= palette.len() || curr_x + rw > w || curr_y + rh > h {
+            return None;
+        }
 
         let color = palette[ci];
         for j in curr_y..(curr_y + rh) {
@@ -443,8 +448,11 @@ fn decode_image(rects: &[Rect], palette: &[Color], w: u32, h: u32, scale_x: u32,
             }
         }
     }
-
+    if used.iter().any(|&v| !v) {
+        return None;
+    }
     Some(Image { width: out_w, height: out_h, pixels })
+    
 }
 
 // --- IVR ファイル I/O ---
@@ -560,16 +568,19 @@ async fn save_file(path: String, data: Vec<u8>) -> Result<(), String> {
     std::fs::write(path, data).map_err(|e| e.to_string())
 }
 
-/// 変換とプレビュー生成を行うコマンド
 #[tauri::command]
 async fn convert_and_preview(
     input_path: String, 
     sx: u32, 
-    sy: u32
+    sy: u32,
+    zstd_level: i32 
 ) -> Result<ConversionResult, String> {
+    let metadata = std::fs::metadata(&input_path).map_err(|e| e.to_string())?;
+    let input_file_size = metadata.len(); // バイト単位
+    
     let t_total = Instant::now();
 
-    // ★ ここで拡張子によって読み込み方を自動分岐させます
+    // 拡張子によって読み込み方を自動分岐
     let lower_path = input_path.to_lowercase();
     let img = if lower_path.ends_with(".bmp") {
         load_bmp(&input_path).map_err(|e| e.to_string())?
@@ -609,8 +620,9 @@ async fn convert_and_preview(
     for r in &rects { bw.write_bits(r.c_idx, color_bits); }
     bw.finish();
 
-    let raw_len = bw.data.len();
-    let compressed = zstd::stream::encode_all(bw.data.as_slice(), ZSTD_COMPRESSION_LEVEL)
+    let raw_len = u32::try_from(bw.data.len())
+        .map_err(|_| "Data too large".to_string())?;
+    let compressed = zstd::stream::encode_all(bw.data.as_slice(), zstd_level)
         .map_err(|e| e.to_string())?;
     let zstd_len = compressed.len();
 
@@ -633,23 +645,52 @@ async fn convert_and_preview(
 
     let dur_total = t_total.elapsed().as_secs_f64();
 
-    // 統計文字列の組み立て
+    let compression_ratio = (zstd_len as f64 / input_file_size as f64) * 100.0;
+
+    // 3. 拡大後のサイズ計算
+    let out_w = img.width.checked_mul(sx).ok_or("Output width overflow")?;
+    let out_h = img.height.checked_mul(sy).ok_or("Output height overflow")?;
+
+    // 4. 統計文字列の組み立て
     let stats = format!(
-        "=== Any -> IVR ===\n\
-         Size: {} x {}\n\
-         Palette: {} colors\n\
-         Rectangles: {}\n\
-         Raw: {} bytes\n\
-         Zstd: {} bytes\n\
-         -------------------\n\
-         Make Pal: {:.4} s\n\
-         Encode  : {:.4} s\n\
-         Zip     : {:.4} s\n\
-         Decode  : {:.4} s\n\
-         TOTAL   : {:.4} s",
-        img.width, img.height, palette.len(), rects.len(), raw_len, zstd_len,
-        dur_pal, dur_enc, dur_zip, dur_dec, dur_total
-    );
+    "=== File Info ===\n\
+     Path       : {}\n\
+     Input Size : {} bytes\n\
+     -------------------\n\
+     === Any -> IVR ===\n\
+     Resolution : {} x {} (Raw)\n\
+     Scale      : x{} , y{}\n\
+     Output Res : {} x {}\n\
+     -------------------\n\
+     Palette    : {} colors\n\
+     Rectangles : {}\n\
+     Raw Data   : {} bytes\n\
+     Zstd Data  : {} bytes\n\
+     Ratio      : {:.2} % of original\n\
+     Zstd Level : {}\n\
+     -------------------\n\
+     Make Pal   : {:.4} s\n\
+     Encode     : {:.4} s\n\
+     Zip        : {:.4} s\n\
+     Decode     : {:.4} s\n\
+     TOTAL      : {:.4} s",
+    input_path,         // パスを表示
+    input_file_size,    // 元のファイルサイズ
+    img.width, img.height,
+    sx, sy,
+    out_w, out_h,
+    palette.len(),
+    rects.len(),
+    raw_len,
+    zstd_len,
+    compression_ratio,  // 圧縮率
+    zstd_level,
+    dur_pal,
+    dur_enc,
+    dur_zip,
+    dur_dec,
+    dur_total
+);
 
     Ok(ConversionResult { bmp_data, ivr_data, stats })
 }

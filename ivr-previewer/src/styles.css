@@ -11,17 +11,29 @@
 }
 
 #log-box {
-  margin-top: auto; /* サイドバーの一番下に配置 */
+  /* margin-top: auto; をやめて、少し隙間を作る */
+  margin-top: 20px; 
+  margin-bottom: 20px; /* 一番下との間に隙間を作る */
+  
   padding: 15px;
   background-color: #111;
   border: 1px solid #333;
   border-radius: 6px;
   font-family: 'Consolas', 'Monaco', monospace;
   font-size: 12px;
-  line-height: 1.6;
-  color: #00ff99; /* ターミナル風の緑色にするとカッコいい */
+  line-height: 1.4;
+  color: #00ff99;
+  
+  word-break: break-all;
+  white-space: pre-wrap;
+  overflow-y: auto;
+  
+  /* 高さの調整 */
+  min-height: 200px; /* 最低限このくらいは確保 */
+  max-height: 800px; /* 伸びすぎ防止 */
+  width: 100%;
+  box-sizing: border-box;
 }
-
 .slider-group {
   margin: 10px 0;
   padding: 10px;
@@ -32,11 +44,17 @@
 .slider-group label {
   display: block;
   margin-bottom: 5px;
-  font-size: 13px;
+  font-size: 14px;
   color: #bbb;
 }
-
+input[type="range"] {
+  width: 80%;          
+  min-width: 160px;     
+  cursor: pointer;
+  accent-color: #00ff99; 
+}
 img {
+  margin: 0 10px;
   max-width: 95%;
   max-height: 95%;
   box-shadow: 0 10px 30px rgba(0,0,0,0.5);
@@ -58,3 +76,52 @@ button:disabled {
   cursor: not-allowed;
 }
 button:hover { background-color: #2b88d8; }
+
+.sidebar {
+  width: 500px;         /* ここで幅をガチガチに固定 */
+  min-width: 500px;     /* 縮まないように */
+  max-width: 500px;     /* 広がらないように */
+  padding: 20px;
+  background-color: #222;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  box-sizing: border-box;
+  overflow-y: auto;     /* 項目が増えてもサイドバー自体をスクロール可能に */
+}
+
+/* 案内画面のスタイル */
+.placeholder {
+  text-align: center;
+  color: #666;
+  border: 2px dashed #333;
+  padding: 40px;
+  border-radius: 20px;
+  user-select: none; /* テキストを選択できないようにしてアプリ感を出す */
+}
+
+.placeholder .icon {
+  font-size: 64px;
+  margin-bottom: 10px;
+  opacity: 0.5;
+}
+
+.placeholder h2 {
+  margin: 0;
+  font-size: 1.5rem;
+  color: #888;
+}
+
+.placeholder p {
+  margin-top: 5px;
+  font-size: 0.9rem;
+}
+
+/* 画像が表示されたら、枠線を消して影をつける（既存のimgを調整） */
+#preview-img {
+  max-width: 95%;
+  max-height: 95%;
+  box-shadow: 0 20px 50px rgba(0,0,0,0.8);
+  border: 1px solid #444;
+}
+

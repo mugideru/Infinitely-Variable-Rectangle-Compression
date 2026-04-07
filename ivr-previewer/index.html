@@ -4,34 +4,58 @@
     <meta charset="UTF-8" />
     <link rel="stylesheet" href="/src/styles.css" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>IVR Previewer</title>
+    <title>IVR Previewer v0.1.0</title>
+    <style>
+      /* ドラッグ中にふわっと色を変えるための演出 */
+      #app {
+        width: 100vw;
+        height: 100vh;
+        transition: background-color 0.2s;
+      }
+      #app.drag-over {
+        background-color: rgba(0, 255, 153, 0.1); /* 成功の色っぽく */
+        outline: 4px dashed #00ff99;
+        outline-offset: -10px;
+      }
+    </style>
   </head>
   <body>
-    <div class="container">
-      <aside class="sidebar">
-  <button id="btn-open">1. Open BMP</button>
-  
-  <div class="slider-group">
-    <label>Scale X: <span id="val-x">1</span></label>
-    <input type="range" id="slider-x" min="1" max="8" value="1">
-  </div>
+    <div id="app">
+      <div class="container">
+        <aside class="sidebar">
+          <button id="btn-open">1. Open Image/IVR</button>
+          
+          <div class="slider-group">
+            <label>Scale X: <span id="val-x">1</span></label>
+            <input type="range" id="slider-x" min="1" max="8" value="1">
+          </div>
 
-  <div class="slider-group">
-    <label>Scale Y: <span id="val-y">1</span></label>
-    <input type="range" id="slider-y" min="1" max="8" value="1">
-  </div>
+          <div class="slider-group">
+            <label>Scale Y: <span id="val-y">1</span></label>
+            <input type="range" id="slider-y" min="1" max="8" value="1">
+          </div>
+          <div class="slider-group">
+            <label>Zstd Level: <span id="val-zstd">19</span></label>
+            <input type="range" id="slider-zstd" min="1" max="22" value="19">
+            <small style="display:block; color: #888;"></small>
+          </div>
+          <button id="btn-convert" class="primary">2. Convert & Preview</button>
 
-  <button id="btn-convert" class="primary">2. Convert & Preview</button>
+          <button id="btn-save-ivr" disabled>3. Save IVR</button>
+          <button id="btn-save-bmp" disabled>3. Save BMP</button>
+          <div id="log-box"></div>
+        </aside>
 
-  <button id="btn-save-ivr" disabled>3. Save IVR</button>
-  <button id="btn-save-bmp" disabled>3. Save BMP</button>
-  <div id="log-box"></div>
-</aside>
-
-      <main class="main-view">
-        <img id="preview-img" alt="Preview will appear here" />
-        
-      </main>
+        <main class="main-view">
+          <div id="drop-placeholder" class="placeholder">
+            <div class="icon">📥</div>
+            <h2>Drop Image or IVR here</h2>
+            <p>Or select a file from the left button</p>
+          </div>
+          
+          <img id="preview-img" style="display: none;" />
+        </main>
+      </div>
     </div>
     <script type="module" src="/src/main.ts"></script>
   </body>
