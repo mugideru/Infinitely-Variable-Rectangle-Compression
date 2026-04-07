@@ -1,7 +1,8 @@
-use std::env;
 use std::fs::File;
 use std::io::{self, Read, Write};
 use std::time::Instant;
+// 画像ライブラリを使用
+use image::GenericImageView;
 
 const ZSTD_COMPRESSION_LEVEL: i32 = 19;
 const IVR_MAX_PALETTE_SIZE: u32 = 16_777_216;
@@ -14,6 +15,13 @@ struct Color {
     r: u8,
     g: u8,
     b: u8,
+}
+
+#[derive(serde::Serialize)]
+struct ConversionResult {
+    bmp_data: Vec<u8>,
+    ivr_data: Vec<u8>,
+    stats: String,
 }
 
 struct Rect {
@@ -45,6 +53,14 @@ struct BitReader<'a> {
 
 fn bits_needed(n: u32) -> i32 {
     if n <= 1 { 1 } else { (32 - (n - 1).leading_zeros()) as i32 }
+}
+
+fn ivr_buffer_write(buf: &mut Vec<u8>, w: u32, h: u32, raw_sz: u32, zstd: &[u8]) {
+    buf.extend_from_slice(b"IVR1");
+    buf.extend_from_slice(&w.to_le_bytes());
+    buf.extend_from_slice(&h.to_le_bytes());
+    buf.extend_from_slice(&raw_sz.to_le_bytes());
+    buf.extend_from_slice(zstd);
 }
 
 // --- ビット操作関連 ---
@@ -144,6 +160,21 @@ impl<'a> BitReader<'a> {
         val
     }
 }
+
+// --- PNG/一般画像読み込み追加 ---
+fn load_general_image(path: &str) -> Result<Image, String> {
+    let dynamic_img = image::open(path).map_err(|e| format!("Image load error: {}", e))?;
+    let rgb_img = dynamic_img.to_rgb8();
+    let (width, height) = rgb_img.dimensions();
+    
+    let mut pixels = Vec::with_capacity((width * height) as usize);
+    for p in rgb_img.pixels() {
+        pixels.push(Color { r: p[0], g: p[1], b: p[2] });
+    }
+    
+    Ok(Image { width, height, pixels })
+}
+
 
 // --- BMP読み書き関連 ---
 
@@ -524,48 +555,114 @@ fn ivr_to_image(ivr_in: &str, sx: u32, sy: u32) -> io::Result<Image> {
     Ok(img)
 }
 
-fn main() {
-    let args: Vec<String> = env::args().collect();
+#[tauri::command]
+async fn save_file(path: String, data: Vec<u8>) -> Result<(), String> {
+    std::fs::write(path, data).map_err(|e| e.to_string())
+}
+
+/// 変換とプレビュー生成を行うコマンド
+#[tauri::command]
+async fn convert_and_preview(
+    input_path: String, 
+    sx: u32, 
+    sy: u32
+) -> Result<ConversionResult, String> {
+    let t_total = Instant::now();
+
+    // ★ ここで拡張子によって読み込み方を自動分岐させます
+    let lower_path = input_path.to_lowercase();
+    let img = if lower_path.ends_with(".bmp") {
+        load_bmp(&input_path).map_err(|e| e.to_string())?
+    } else if lower_path.ends_with(".ivr") {
+        // IVRファイルの場合は一旦等倍(1, 1)で生画像として読み込む
+        ivr_to_image(&input_path, 1, 1).map_err(|e| e.to_string())?
+    } else {
+        // PNGやJPGなどは image クレートにお任せ
+        load_general_image(&input_path)?
+    };
     
-    // 引数チェック: プログラム名 + 4つの引数が必要
-    if args.len() < 5 {
-        eprintln!("Usage: {} <in.bmp> <out.ivr> <scale_x> <scale_y>", args[0]);
-        std::process::exit(1);
-    }
+    // 2. パレット計測
+    let t_pal = Instant::now();
+    let (palette, indexed) = make_palette(&img);
+    let dur_pal = t_pal.elapsed().as_secs_f64();
 
-    // スケール値のパース
-    let sx: u32 = args[3].parse().unwrap_or(0);
-    let sy: u32 = args[4].parse().unwrap_or(0);
-    
-    if sx == 0 || sy == 0 {
-        eprintln!("Error: Scale factors must be greater than 0.");
-        std::process::exit(1);
-    }
+    // 3. エンコード計測
+    let t_enc = Instant::now();
+    let rects = encode_image(&indexed, img.width, img.height);
+    let dur_enc = t_enc.elapsed().as_secs_f64();
 
-    if let Err(e) = bmp_to_ivr(&args[1], &args[2]) {
-        eprintln!("Encoder Error: {}", e);
-        std::process::exit(1);
+    // 4. IVR作成計測
+    let t_zip = Instant::now();
+    let mut bw = BitWriter::new();
+    bw.write_exp_golomb(palette.len() as u32);
+    bw.write_exp_golomb(rects.len() as u32);
+    let mut last_c = Color::default();
+    for p in &palette {
+        bw.write_bits(p.r.wrapping_sub(last_c.r) as u32, 8);
+        bw.write_bits(p.g.wrapping_sub(last_c.g) as u32, 8);
+        bw.write_bits(p.b.wrapping_sub(last_c.b) as u32, 8);
+        last_c = *p;
     }
+    let color_bits = bits_needed(palette.len() as u32);
+    for r in &rects { bw.write_exp_golomb(r.w); }
+    for r in &rects { bw.write_exp_golomb(r.h); }
+    for r in &rects { bw.write_bits(r.c_idx, color_bits); }
+    bw.finish();
 
-    match ivr_to_image(&args[2], sx, sy) {
-        Ok(preview) => {
-            let stdout = io::stdout();
-            let mut handle = stdout.lock();
-            
-            // 標準出力へBMPストリームを書き出し
-            if let Err(e) = write_bmp_stream(&mut handle, &preview) {
-                eprintln!("Writer Error: {}", e);
-            }
+    let raw_len = bw.data.len();
+    let compressed = zstd::stream::encode_all(bw.data.as_slice(), ZSTD_COMPRESSION_LEVEL)
+        .map_err(|e| e.to_string())?;
+    let zstd_len = compressed.len();
 
-            // デコード後の最終的なサイズを標準エラー出力に表示
-            eprintln!(
-                "\nSuccessfully decoded with scale {}x{}. Final size: {}x{} pixels.", 
-                sx, sy, preview.width, preview.height
-            );    
-        }
-        Err(e) => {
-            eprintln!("Decoder Error: {}", e);
-            std::process::exit(1);
-        }
-    }
+    // IVRバイナリ組み立て
+    let mut ivr_data = Vec::new();
+    ivr_data.extend_from_slice(b"IVR1");
+    ivr_data.extend_from_slice(&img.width.to_le_bytes());
+    ivr_data.extend_from_slice(&img.height.to_le_bytes());
+    ivr_data.extend_from_slice(&(raw_len as u32).to_le_bytes());
+    ivr_data.extend_from_slice(&compressed);
+    let dur_zip = t_zip.elapsed().as_secs_f64();
+
+    // 5. プレビュー用デコード計測
+    let t_dec = Instant::now();
+    let preview_img = decode_image(&rects, &palette, img.width, img.height, sx, sy)
+        .ok_or("Decode error")?;
+    let mut bmp_data = Vec::new();
+    write_bmp_stream(&mut bmp_data, &preview_img).map_err(|e| e.to_string())?;
+    let dur_dec = t_dec.elapsed().as_secs_f64();
+
+    let dur_total = t_total.elapsed().as_secs_f64();
+
+    // 統計文字列の組み立て
+    let stats = format!(
+        "=== Any -> IVR ===\n\
+         Size: {} x {}\n\
+         Palette: {} colors\n\
+         Rectangles: {}\n\
+         Raw: {} bytes\n\
+         Zstd: {} bytes\n\
+         -------------------\n\
+         Make Pal: {:.4} s\n\
+         Encode  : {:.4} s\n\
+         Zip     : {:.4} s\n\
+         Decode  : {:.4} s\n\
+         TOTAL   : {:.4} s",
+        img.width, img.height, palette.len(), rects.len(), raw_len, zstd_len,
+        dur_pal, dur_enc, dur_zip, dur_dec, dur_total
+    );
+
+    Ok(ConversionResult { bmp_data, ivr_data, stats })
+}
+
+// エントリポイント
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init()) 
+        .invoke_handler(tauri::generate_handler![
+            convert_and_preview,
+            save_file
+        ]) 
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
 }

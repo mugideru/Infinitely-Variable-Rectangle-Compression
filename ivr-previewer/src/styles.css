@@ -1,0 +1,60 @@
+/* ダークモード風のデザイン */
+:root {
+  font-family: 'Segoe UI', sans-serif;
+  color: #e0e0e0;
+  background-color: #1a1a1a;
+}
+
+.container {
+  display: flex;
+  height: 100vh;
+}
+
+#log-box {
+  margin-top: auto; /* サイドバーの一番下に配置 */
+  padding: 15px;
+  background-color: #111;
+  border: 1px solid #333;
+  border-radius: 6px;
+  font-family: 'Consolas', 'Monaco', monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #00ff99; /* ターミナル風の緑色にするとカッコいい */
+}
+
+.slider-group {
+  margin: 10px 0;
+  padding: 10px;
+  background: #333;
+  border-radius: 4px;
+}
+
+.slider-group label {
+  display: block;
+  margin-bottom: 5px;
+  font-size: 13px;
+  color: #bbb;
+}
+
+img {
+  max-width: 95%;
+  max-height: 95%;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+  border: 1px solid #444;
+}
+
+button {
+  background-color: #0078d4;
+  color: white;
+  border: none;
+  padding: 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  margin-bottom: 10px; /* ボタン同士に隙間を作る */
+  width: 100%;        /* サイドバー幅いっぱいに広げる */
+}
+button:disabled {
+  background-color: #444; /* 無効時はグレーにする */
+  cursor: not-allowed;
+}
+button:hover { background-color: #2b88d8; }

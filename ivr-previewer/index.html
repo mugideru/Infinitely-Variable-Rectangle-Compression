@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" href="/src/styles.css" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>IVR Previewer</title>
+  </head>
+  <body>
+    <div class="container">
+      <aside class="sidebar">
+  <button id="btn-open">1. Open BMP</button>
+  
+  <div class="slider-group">
+    <label>Scale X: <span id="val-x">1</span></label>
+    <input type="range" id="slider-x" min="1" max="8" value="1">
+  </div>
+
+  <div class="slider-group">
+    <label>Scale Y: <span id="val-y">1</span></label>
+    <input type="range" id="slider-y" min="1" max="8" value="1">
+  </div>
+
+  <button id="btn-convert" class="primary">2. Convert & Preview</button>
+
+  <button id="btn-save-ivr" disabled>3. Save IVR</button>
+  <button id="btn-save-bmp" disabled>3. Save BMP</button>
+  <div id="log-box"></div>
+</aside>
+
+      <main class="main-view">
+        <img id="preview-img" alt="Preview will appear here" />
+        
+      </main>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
