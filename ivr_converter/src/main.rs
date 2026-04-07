@@ -254,7 +254,6 @@ fn make_palette(img: &Image) -> (Vec<Color>, Vec<u32>) {
         let p = &img.pixels[i];
         let c = ((p.r as u32) << 16) | ((p.g as u32) << 8) | (p.b as u32);
         
-        // C版の hash_func を再現
         let mut h_val = c;
         h_val = ((h_val >> 16) ^ h_val).wrapping_mul(0x45d9f3b);
         h_val = ((h_val >> 16) ^ h_val).wrapping_mul(0x45d9f3b);
@@ -556,7 +555,6 @@ fn main() {
         Ok(preview) => {
             let stdout = io::stdout();
             let mut handle = stdout.lock();
-            // Rustの標準出力(Write)はデフォルトでバイナリセーフなので _setmode は不要
             if let Err(e) = write_bmp_stream(&mut handle, &preview) {
                 eprintln!("Writer Error: {}", e);
             }
