@@ -1,7 +1,7 @@
 
 -----
 
-# IVR (Infinitely Variable Rectangle)
+# IVR (Infinitely Variable Rectangle , Imitate Vector Rendering)
 
 -----
 
