@@ -6,7 +6,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 const btnOpen = document.querySelector("#btn-open") as HTMLButtonElement;
 const btnConvert = document.querySelector("#btn-convert") as HTMLButtonElement;
 const btnSaveIvr = document.querySelector("#btn-save-ivr") as HTMLButtonElement;
-const btnSaveBmp = document.querySelector("#btn-save-bmp") as HTMLButtonElement;
+const btnSavePng = document.querySelector("#btn-save-png") as HTMLButtonElement;
 
 
 const sliderX = document.querySelector("#slider-x") as HTMLInputElement;
@@ -17,7 +17,7 @@ const logBox = document.querySelector("#log-box") as HTMLElement;
 const appElement = document.getElementById("app")!;
 
 let currentIvrData: Uint8Array | null = null;
-let currentBmpData: Uint8Array | null = null;
+let currentPngData: Uint8Array | null = null;
 let selectedPath = "";
 
 function log(msg: string) {
@@ -37,7 +37,7 @@ async function runConversion() {
   try {
     log("Converting...");
     // Rust側を呼び出し
-    const res = await invoke<{ bmp_data: number[], ivr_data: number[], stats: string }>(
+    const res = await invoke<{ png_data: number[], ivr_data: number[], stats: string }>(
       "convert_and_preview", 
       {
         inputPath: selectedPath,
@@ -48,10 +48,10 @@ async function runConversion() {
     );
 
     currentIvrData = new Uint8Array(res.ivr_data);
-    currentBmpData = new Uint8Array(res.bmp_data);
+    currentPngData = new Uint8Array(res.png_data);
 
     // プレビュー表示
-    const blob = new Blob([currentBmpData.buffer as any], { type: "image/bmp" });
+    const blob = new Blob([currentPngData.buffer as any], { type: "image/png" });
     if (previewImg.src) URL.revokeObjectURL(previewImg.src); 
     previewImg.src = URL.createObjectURL(blob);
 
@@ -65,7 +65,7 @@ async function runConversion() {
 
     // ボタン有効化
     btnSaveIvr.disabled = false;
-    btnSaveBmp.disabled = false;
+    btnSavePng.disabled = false;
     log("Success: Preview updated.");
 
   } catch (err) {
@@ -108,18 +108,18 @@ btnSaveIvr.onclick = async () => {
   }
 };
 
-// 4. BMP保存
-btnSaveBmp.onclick = async () => {
-  if (!currentBmpData) return;
+// 4. 保存
+btnSavePng.onclick = async () => {
+  if (!currentPngData) return;
   const path = await save({ 
-    defaultPath: 'preview.bmp',
-    filters: [{ name: 'BMP', extensions: ['bmp'] }] 
+    defaultPath: 'preview.png',
+    filters: [{ name: 'PNG', extensions: ['png'] }] 
   });
   
   if (path) {
     try {
-      await invoke("save_file", { path, data: Array.from(currentBmpData) });
-      log(`Saved BMP: ${path.split(/[\\\/]/).pop()}`);
+      await invoke("save_file", { path, data: Array.from(currentPngData) });
+      log(`Saved PNG: ${path.split(/[\\\/]/).pop()}`);
     } catch (e) {
       log(`Save Error: ${e}`);
     }
