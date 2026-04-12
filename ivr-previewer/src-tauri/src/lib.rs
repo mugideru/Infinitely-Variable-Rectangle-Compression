@@ -1,12 +1,13 @@
 use std::fs::File;
-use std::io::{self, Read, Write};
+use std::io::{self, Read, Cursor};
 use std::time::Instant;
-// 画像ライブラリを使用
-use image::GenericImageView;
+use image::{GenericImageView, ImageEncoder, ColorType, load_from_memory};
+use image::codecs::png::PngEncoder;
 
 const ZSTD_COMPRESSION_LEVEL: i32 = 19;
 const IVR_MAX_PALETTE_SIZE: u32 = 16_777_216;
 const IVR_MAX_RECT_COUNT: u32 = 16_000_000;
+const MAX_IMAGE_PIXELS: u32 = 268435456;
 
 // --- データ構造定義 ---
 
@@ -15,11 +16,12 @@ struct Color {
     r: u8,
     g: u8,
     b: u8,
+    a: u8, 
 }
 
 #[derive(serde::Serialize)]
 struct ConversionResult {
-    bmp_data: Vec<u8>,
+    png_data: Vec<u8>,
     ivr_data: Vec<u8>,
     stats: String,
 }
@@ -53,14 +55,6 @@ struct BitReader<'a> {
 
 fn bits_needed(n: u32) -> i32 {
     if n <= 1 { 1 } else { (32 - (n - 1).leading_zeros()) as i32 }
-}
-
-fn ivr_buffer_write(buf: &mut Vec<u8>, w: u32, h: u32, raw_sz: u32, zstd: &[u8]) {
-    buf.extend_from_slice(b"IVR1");
-    buf.extend_from_slice(&w.to_le_bytes());
-    buf.extend_from_slice(&h.to_le_bytes());
-    buf.extend_from_slice(&raw_sz.to_le_bytes());
-    buf.extend_from_slice(zstd);
 }
 
 // --- ビット操作関連 ---
@@ -163,52 +157,49 @@ impl<'a> BitReader<'a> {
 
 // --- PNG/一般画像読み込み追加 ---
 fn load_general_image(path: &str) -> Result<Image, String> {
-    let dynamic_img = image::open(path).map_err(|e| format!("Image load error: {}", e))?;
-    let rgb_img = dynamic_img.to_rgb8();
-    let (width, height) = rgb_img.dimensions();
+    // ファイルを一旦メモリに読み込む
+    let bytes = std::fs::read(path).map_err(|e| format!("File read error: {}", e))?;
     
+    let dynamic_img = image::load_from_memory(&bytes)
+        .map_err(|e| format!("Image load error: {}", e))?;
+    
+    let rgba_img = dynamic_img.to_rgba8();
+    let (width, height) = rgba_img.dimensions();
+    
+    if width * height > MAX_IMAGE_PIXELS {
+        return Err(format!("画像サイズが大きすぎます ({}x{})。", width, height));
+    }
+
     let mut pixels = Vec::with_capacity((width * height) as usize);
-    for p in rgb_img.pixels() {
-        pixels.push(Color { r: p[0], g: p[1], b: p[2] });
+    for p in rgba_img.pixels() {
+        pixels.push(Color { r: p[0], g: p[1], b: p[2], a: p[3] });
     }
     
     Ok(Image { width, height, pixels })
 }
 
-
 // --- BMP読み書き関連 ---
 
-fn write_bmp_stream<W: Write>(stream: &mut W, img: &Image) -> io::Result<()> {
+// プレビュー用のBMP出力を 32-bit (アルファ対応) に変更
+fn write_png_preview(img: &Image) -> Result<Vec<u8>, String> {
     if img.width == 0 || img.height == 0 || img.pixels.is_empty() {
-        return Ok(());
+        return Ok(Vec::new());
     }
 
-    let row_size = (((img.width * 3) + 3) / 4) * 4;
-    let mut header = [0u8; 54];
+    let mut png_data = Vec::new();
+    let raw_pixels: Vec<u8> = img.pixels.iter()
+        .flat_map(|p| [p.r, p.g, p.b, p.a])
+        .collect();
+
+    let encoder = PngEncoder::new(Cursor::new(&mut png_data));
+    encoder.write_image(
+        &raw_pixels,
+        img.width,
+        img.height,
+        ColorType::Rgba8,
+    ).map_err(|e| format!("PNG encoding error: {}", e))?;
     
-    header[0] = b'B'; header[1] = b'M';
-    let file_size = 54 + row_size * img.height;
-    header[2..6].copy_from_slice(&file_size.to_le_bytes());
-    header[10..14].copy_from_slice(&54u32.to_le_bytes());
-    header[14..18].copy_from_slice(&40u32.to_le_bytes());
-    header[18..22].copy_from_slice(&img.width.to_le_bytes());
-    header[22..26].copy_from_slice(&img.height.to_le_bytes());
-    header[26] = 1; header[28] = 24;
-
-    stream.write_all(&header)?;
-
-    let mut row = vec![0u8; row_size as usize];
-    for y in (0..img.height).rev() {
-        for x in 0..img.width {
-            let c = img.pixels[(y * img.width + x) as usize];
-            let idx = (x * 3) as usize;
-            row[idx] = c.b;
-            row[idx + 1] = c.g;
-            row[idx + 2] = c.r;
-        }
-        stream.write_all(&row)?;
-    }
-    Ok(())
+    Ok(png_data)
 }
 
 fn load_bmp(filename: &str) -> io::Result<Image> {
@@ -233,11 +224,10 @@ fn load_bmp(filename: &str) -> io::Result<Image> {
     let h_img = i32::from_le_bytes(h[22..26].try_into().unwrap());
     let height = h_img.unsigned_abs();
 
-    if width == 0 || height == 0 || width > 32768 || height > 32768 {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "Invalid dimensions"));
+    if width == 0 || height == 0 || width * height > MAX_IMAGE_PIXELS {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "Invalid dimensions or too large"));
     }
 
-    // Skip to pixel data
     let mut skip = vec![0u8; (pixel_offset - 54) as usize];
     if pixel_offset < 54 {
         return Err(io::Error::new(io::ErrorKind::InvalidData, "Invalid BMP pixel offset"));
@@ -257,6 +247,7 @@ fn load_bmp(filename: &str) -> io::Result<Image> {
                 r: row[idx + 2],
                 g: row[idx + 1],
                 b: row[idx],
+                a: 255, 
             };
         }
     }
@@ -271,13 +262,14 @@ fn make_palette(img: &Image) -> (Vec<Color>, Vec<u32>) {
     let mut palette = Vec::with_capacity(65536);
     let mut indexed = vec![0u32; total_pixels];
 
-    // C版の HASH_TABLE_INITIAL_SIZE と同等
     let mut current_hash_size = 65536u32;
-    let mut table = vec![(0u32, 0u32, false); current_hash_size as usize]; // (color, index, occupied)
+    let mut table = vec![(0u32, 0u32, false); current_hash_size as usize]; 
 
     for i in 0..total_pixels {
         let p = &img.pixels[i];
-        let c = ((p.r as u32) << 16) | ((p.g as u32) << 8) | (p.b as u32);
+        
+        // RGBA全てを結合して一意な u32 を作る（ビットシフトより from_be_bytes が確実）
+        let c = u32::from_be_bytes([p.r, p.g, p.b, p.a]);
         
         let mut h_val = c;
         h_val = ((h_val >> 16) ^ h_val).wrapping_mul(0x45d9f3b);
@@ -287,14 +279,12 @@ fn make_palette(img: &Image) -> (Vec<Color>, Vec<u32>) {
         let mut mask = current_hash_size - 1;
         let mut h = (h_val & mask) as usize;
 
-        // オープンアドレス法による探索
         while table[h].2 {
             if table[h].0 == c { break; }
             h = (h + 1) & (mask as usize);
         }
 
         if !table[h].2 {
-            // リサイズ判定 (Load Factor 70%)
             if (palette.len() as u32) * 10 > current_hash_size * 7 {
                 let old_table = table;
                 current_hash_size *= 2;
@@ -313,7 +303,6 @@ fn make_palette(img: &Image) -> (Vec<Color>, Vec<u32>) {
                         table[nh] = entry;
                     }
                 }
-                // リサイズ後に現在の色のハッシュ位置を再計算
                 h = (h_val & mask) as usize;
                 while table[h].2 { h = (h + 1) & (mask as usize); }
             }
@@ -452,7 +441,6 @@ fn decode_image(rects: &[Rect], palette: &[Color], w: u32, h: u32, scale_x: u32,
         return None;
     }
     Some(Image { width: out_w, height: out_h, pixels })
-    
 }
 
 // --- IVR ファイル I/O ---
@@ -482,6 +470,11 @@ fn ivr_to_image(ivr_in: &str, sx: u32, sy: u32) -> io::Result<Image> {
     }
 
     let mut br = BitReader::new(&raw);
+    
+    // ★ アルファ情報のデコード (9-bit)
+    let is_variable_alpha = br.read_bits(1) == 1;
+    let global_alpha = br.read_bits(8) as u8;
+
     let pal_sz = br.read_exp_golomb();
     let rect_cnt = br.read_exp_golomb();
 
@@ -495,6 +488,13 @@ fn ivr_to_image(ivr_in: &str, sx: u32, sy: u32) -> io::Result<Image> {
         cur.r = cur.r.wrapping_add(br.read_bits(8) as u8);
         cur.g = cur.g.wrapping_add(br.read_bits(8) as u8);
         cur.b = cur.b.wrapping_add(br.read_bits(8) as u8);
+        
+        // 可変ならパレットから復元、一律ならグローバル値を割り当て
+        if is_variable_alpha {
+            cur.a = cur.a.wrapping_add(br.read_bits(8) as u8);
+        } else {
+            cur.a = global_alpha;
+        }
         pal.push(cur);
     }
 
@@ -527,22 +527,26 @@ async fn convert_and_preview(
     zstd_level: i32 
 ) -> Result<ConversionResult, String> {
     let metadata = std::fs::metadata(&input_path).map_err(|e| e.to_string())?;
-    let input_file_size = metadata.len(); // バイト単位
-    
+    let input_file_size = metadata.len(); 
     let t_total = Instant::now();
 
-    // 拡張子によって読み込み方を自動分岐
+    // 1. 画像読み込み
     let lower_path = input_path.to_lowercase();
-    let img = if lower_path.ends_with(".bmp") {
-        load_bmp(&input_path).map_err(|e| e.to_string())?
-    } else if lower_path.ends_with(".ivr") {
-        // IVRファイルの場合は一旦等倍(1, 1)で生画像として読み込む
+    let img = if lower_path.ends_with(".ivr") {
         ivr_to_image(&input_path, 1, 1).map_err(|e| e.to_string())?
     } else {
-        // PNGやJPGなどは image クレートにお任せ
         load_general_image(&input_path)?
     };
     
+    let mut is_variable_alpha = false;
+    let global_alpha = img.pixels.first().map(|p| p.a).unwrap_or(255);
+    for p in &img.pixels {
+        if p.a != global_alpha {
+            is_variable_alpha = true;
+            break;
+        }
+    }
+
     // 2. パレット計測
     let t_pal = Instant::now();
     let (palette, indexed) = make_palette(&img);
@@ -553,31 +557,35 @@ async fn convert_and_preview(
     let rects = encode_image(&indexed, img.width, img.height);
     let dur_enc = t_enc.elapsed().as_secs_f64();
 
-    // 4. IVR作成計測
+    // 4. IVR作成計測 (zstd圧縮含む)
     let t_zip = Instant::now();
     let mut bw = BitWriter::new();
+    bw.write_bits(is_variable_alpha as u32, 1);
+    bw.write_bits(global_alpha as u32, 8);
     bw.write_exp_golomb(palette.len() as u32);
     bw.write_exp_golomb(rects.len() as u32);
+
     let mut last_c = Color::default();
     for p in &palette {
         bw.write_bits(p.r.wrapping_sub(last_c.r) as u32, 8);
         bw.write_bits(p.g.wrapping_sub(last_c.g) as u32, 8);
         bw.write_bits(p.b.wrapping_sub(last_c.b) as u32, 8);
+        if is_variable_alpha {
+            bw.write_bits(p.a.wrapping_sub(last_c.a) as u32, 8);
+        }
         last_c = *p;
     }
+    
     let color_bits = bits_needed(palette.len() as u32);
     for r in &rects { bw.write_exp_golomb(r.w); }
     for r in &rects { bw.write_exp_golomb(r.h); }
     for r in &rects { bw.write_bits(r.c_idx, color_bits); }
     bw.finish();
 
-    let raw_len = u32::try_from(bw.data.len())
-        .map_err(|_| "Data too large".to_string())?;
-    let compressed = zstd::stream::encode_all(bw.data.as_slice(), zstd_level)
-        .map_err(|e| e.to_string())?;
+    let raw_len = u32::try_from(bw.data.len()).map_err(|_| "Data too large".to_string())?;
+    let compressed = zstd::stream::encode_all(bw.data.as_slice(), zstd_level).map_err(|e| e.to_string())?;
     let zstd_len = compressed.len();
 
-    // IVRバイナリ組み立て
     let mut ivr_data = Vec::new();
     ivr_data.extend_from_slice(b"IVR1");
     ivr_data.extend_from_slice(&img.width.to_le_bytes());
@@ -586,66 +594,52 @@ async fn convert_and_preview(
     ivr_data.extend_from_slice(&compressed);
     let dur_zip = t_zip.elapsed().as_secs_f64();
 
-    // 5. プレビュー用デコード計測
+    // 5. プレビュー用デコード
     let t_dec = Instant::now();
     let preview_img = decode_image(&rects, &palette, img.width, img.height, sx, sy)
         .ok_or("Decode error")?;
-    let mut bmp_data = Vec::new();
-    write_bmp_stream(&mut bmp_data, &preview_img).map_err(|e| e.to_string())?;
+    let png_data = write_png_preview(&preview_img)?;
     let dur_dec = t_dec.elapsed().as_secs_f64();
 
+    // 統計計算
     let dur_total = t_total.elapsed().as_secs_f64();
-
     let compression_ratio = (zstd_len as f64 / input_file_size as f64) * 100.0;
-
-    // 3. 拡大後のサイズ計算
+    let alpha_status = if is_variable_alpha { "Variable (in Palette)" } else { "Uniform (in Header)" };
+    
     let out_w = img.width.checked_mul(sx).ok_or("Output width overflow")?;
     let out_h = img.height.checked_mul(sy).ok_or("Output height overflow")?;
 
-    // 4. 統計文字列の組み立て
     let stats = format!(
-    "=== File Info ===\n\
-     Path       : {}\n\
-     Input Size : {} bytes\n\
-     -------------------\n\
-     === Any -> IVR ===\n\
-     Resolution : {} x {} (Raw)\n\
-     Scale      : x{} , y{}\n\
-     Output Res : {} x {}\n\
-     -------------------\n\
-     Palette    : {} colors\n\
-     Rectangles : {}\n\
-     Raw Data   : {} bytes\n\
-     Zstd Data  : {} bytes\n\
-     Ratio      : {:.2} % of original\n\
-     Zstd Level : {}\n\
-     -------------------\n\
-     Make Pal   : {:.4} s\n\
-     Encode     : {:.4} s\n\
-     Zip        : {:.4} s\n\
-     Decode     : {:.4} s\n\
-     TOTAL      : {:.4} s",
-    input_path,         // パスを表示
-    input_file_size,    // 元のファイルサイズ
-    img.width, img.height,
-    sx, sy,
-    out_w, out_h,
-    palette.len(),
-    rects.len(),
-    raw_len,
-    zstd_len,
-    compression_ratio,  // 圧縮率
-    zstd_level,
-    dur_pal,
-    dur_enc,
-    dur_zip,
-    dur_dec,
-    dur_total
-);
+        "=== File Info ===\n\
+         Path       : {}\n\
+         Input Size : {} bytes\n\
+         -------------------\n\
+         === Any -> IVR ===\n\
+         Resolution : {} x {} (Raw)\n\
+         Scale      : x{} , y{}\n\
+         Output Res : {} x {}\n\
+         Alpha Mode : {}\n\
+         -------------------\n\
+         Palette    : {} colors\n\
+         Rectangles : {}\n\
+         Raw Data   : {} bytes\n\
+         Zstd Data  : {} bytes\n\
+         Ratio      : {:.2} % of original\n\
+         Zstd Level : {}\n\
+         -------------------\n\
+         Make Pal   : {:.4} s\n\
+         Encode     : {:.4} s\n\
+         Zip        : {:.4} s\n\
+         Decode(PNG): {:.4} s\n\
+         TOTAL      : {:.4} s",
+        input_path, input_file_size, img.width, img.height, sx, sy, 
+        out_w, out_h, alpha_status, 
+        palette.len(), rects.len(), raw_len, zstd_len, compression_ratio, zstd_level,
+        dur_pal, dur_enc, dur_zip, dur_dec, dur_total
+    );
 
-    Ok(ConversionResult { bmp_data, ivr_data, stats })
+    Ok(ConversionResult { png_data, ivr_data, stats })
 }
-
 // エントリポイント
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
