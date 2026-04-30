@@ -1,4 +1,4 @@
-<img width="2559" height="1391" alt="スクリーンショット 2026-05-01 053137" src="https://github.com/user-attachments/assets/efdba300-ea23-4b88-a273-3999d6329572" />
+
 -----
 
 # IVR (Infinitely Variable Rectangle , Imitate Vector Rendering)
