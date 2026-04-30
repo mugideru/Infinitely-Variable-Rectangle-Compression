@@ -1,4 +1,4 @@
-
+<img width="2559" height="1391" alt="スクリーンショット 2026-05-01 053137" src="https://github.com/user-attachments/assets/efdba300-ea23-4b88-a273-3999d6329572" />
 -----
 
 # IVR (Infinitely Variable Rectangle , Imitate Vector Rendering)
@@ -49,14 +49,41 @@ Unlike PNG which scans line-by-line, IVR identifies the **largest possible same-
 
 (Benchmark)
 
-**Image: 1700 × 2200 (Document Style)**
+**Image:  2559 x 1391 (VSCODE)**
 
-  - **BMP:** 11.2 MB
-  - **PNG:** 115 KB
-  - **IVR:** **47 KB** (PNG比 約40%)
+  - **BMP:** 10.1 MB
+  - **PNG:** 268 KB
+  - **IVR:** **92.9 KB** (PNG比 約33%)
 
-  - **Encode Time:** **0.014s**
-  - **Decode Time:** **0.016s**
+  - **Encode Time:** **0.0105s**
+  - **Zstd Time:** **0.0283s**
+  - **Decode Time:** **0.0144s**
+
+<img width="2559" height="1391" alt="スクリーンショット 2026-05-01 053137" src="https://github.com/user-attachments/assets/03e77e9f-492a-4b69-934d-2ec61aa486cc" />
+
+Log:
+=== File Info ===
+Input Size : 274440 bytes
+-------------------
+=== Any -> IVR ===
+Resolution : 2559 x 1391 (Raw)
+Scale      : x1 , y1
+Output Res : 2559 x 1391
+-------------------
+Palette    : 4082 colors
+Rectangles : 72837
+Raw Data   : 152524 bytes
+Zstd Data  : 92973 bytes
+Ratio      : 33.88 % of original
+Zstd Level : 19
+-------------------
+Make Pal   : 0.0075 s
+Encode     : 0.0105 s
+Zip        : 0.0283 s
+Decode     : 0.0144 s
+TOTAL      : 0.0715 s
+
+-----
 
 Since IVR can represent massive images with tiny file sizes (similar to a "zip bomb"), implementations include safety guards for:
 
@@ -113,14 +140,39 @@ IVRは「小さなファイルから巨大な画素」を生成できるため�
 
 ## 実測値の例 (Benchmark)
 
-**Image: 1700 × 2200 (Document Style)**
+**Image:  2559 x 1391 (VSCODE)**
 
-  - **BMP:** 11.2 MB
-  - **PNG:** 115 KB
-  - **IVR:** **47 KB** (PNG比 約40%)
+  - **BMP:** 10.1 MB
+  - **PNG:** 268 KB
+  - **IVR:** **92.9 KB** (PNG比 約33%)
 
-  - **Encode Time:** **0.014s**
-  - **Decode Time:** **0.016s**
+  - **Encode Time:** **0.0105s**
+  - **Zstd Time:** **0.0283s**
+  - **Decode Time:** **0.0144s**
+
+<img width="2559" height="1391" alt="スクリーンショット 2026-05-01 053137" src="https://github.com/user-attachments/assets/03e77e9f-492a-4b69-934d-2ec61aa486cc" />
+
+Log:
+=== File Info ===
+Input Size : 274440 bytes
+-------------------
+=== Any -> IVR ===
+Resolution : 2559 x 1391 (Raw)
+Scale      : x1 , y1
+Output Res : 2559 x 1391
+-------------------
+Palette    : 4082 colors
+Rectangles : 72837
+Raw Data   : 152524 bytes
+Zstd Data  : 92973 bytes
+Ratio      : 33.88 % of original
+Zstd Level : 19
+-------------------
+Make Pal   : 0.0075 s
+Encode     : 0.0105 s
+Zip        : 0.0283 s
+Decode     : 0.0144 s
+TOTAL      : 0.0715 s
 
 -----
 
