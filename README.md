@@ -53,7 +53,7 @@ Unlike PNG which scans line-by-line, IVR identifies the **largest possible same-
 
   - **BMP:** 10.1 MB
   - **PNG:** 268 KB
-  - **IVR:** **92.9 KB** (PNG比 約33%)
+  - **IVR:** **92.9 KB** (Down to approx. 33% of PNG size)
 
   - **Encode Time:** **0.0105s**
   - **Zstd Time:** **0.0283s**
